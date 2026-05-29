@@ -44,6 +44,7 @@ async function sendOtp(email, otp) {
   if (process.env.SLACK_BOT_TOKEN) {
     try {
       const lookup = await slackApiCall('users.lookupByEmail', { email }, true);
+      console.log('[Slack] lookupByEmail response:', JSON.stringify(lookup));
       if (lookup.ok) {
         const slackUserId = lookup.user.id;
         // Open DM channel
