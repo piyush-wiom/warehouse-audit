@@ -1,7 +1,23 @@
 import { useState, useRef } from 'react';
 import api from '../../lib/api';
 import toast from 'react-hot-toast';
-import { Upload, FileText, AlertTriangle, CheckCircle } from 'lucide-react';
+import { Upload, FileText, AlertTriangle, CheckCircle, Download } from 'lucide-react';
+
+const SAMPLE_CSV = `LocationCode,ItemNo,No2,Description,Inventory,BinCode,ZoneCode,SerialNo,MacId,DeviceId
+WH-DELHI,ITEM001,ONT,Optical Network Terminal,Good Inventory,BIN-A01,ZONE-01,SY104766,AA:BB:CC:DD:EE:01,DEV001
+WH-DELHI,ITEM002,Router,WiFi Router,Good Inventory,BIN-A01,ZONE-01,SY104767,AA:BB:CC:DD:EE:02,DEV002
+WH-DELHI,ITEM003,ONT,Optical Network Terminal,Bad Inventory,BIN-B01,ZONE-02,SY104768,AA:BB:CC:DD:EE:03,DEV003
+`;
+
+function downloadSampleCSV() {
+  const blob = new Blob([SAMPLE_CSV], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'inventory_template.csv';
+  a.click();
+  URL.revokeObjectURL(url);
+}
 
 export default function Inventory() {
   const [uploading, setUploading] = useState(false);
@@ -39,7 +55,12 @@ export default function Inventory() {
       <h2 className="text-xl font-bold text-gray-900 mb-6">Inventory Upload</h2>
 
       <div className="card mb-6">
-        <h3 className="font-semibold text-gray-900 mb-3">Required Columns (exact names)</h3>
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="font-semibold text-gray-900">Required Columns (exact names)</h3>
+          <button onClick={downloadSampleCSV} className="btn-secondary text-xs py-1.5">
+            <Download size={14} /> Download Template
+          </button>
+        </div>
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
           {['LocationCode', 'ItemNo', 'No2', 'Description', 'Inventory', 'BinCode', 'ZoneCode', 'SerialNo', 'MacId', 'DeviceId'].map(col => (
             <code key={col} className="text-xs bg-gray-100 px-2 py-1 rounded font-mono">{col}</code>
