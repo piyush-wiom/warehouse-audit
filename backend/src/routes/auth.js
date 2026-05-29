@@ -44,21 +44,21 @@ async function sendOtp(email, otp) {
   if (process.env.SLACK_BOT_TOKEN) {
     try {
       const lookup = await slackApiCall('users.lookupByEmail', { email }, true);
-      console.log('[Slack] lookupByEmail response:', JSON.stringify(lookup));
       if (lookup.ok) {
         const slackUserId = lookup.user.id;
-        // Open DM channel
-        const dm = await slackApiCall('conversations.open', { users: slackUserId });
-        if (dm.ok) {
-          await slackApiCall('chat.postMessage', {
-            channel: dm.channel.id,
-            text: `🔐 *Warehouse Audit Login OTP*\n\nYour OTP is: *${otp}*\n\nValid for 5 minutes. Do not share this with anyone.`,
-          });
+        // Send DM directly using user ID as channel
+        const msg = await slackApiCall('chat.postMessage', {
+          channel: slackUserId,
+          text: `🔐 *Warehouse Audit Login OTP*\n\nYour OTP is: *${otp}*\n\nValid for 5 minutes. Do not share this with anyone.`,
+        });
+        if (msg.ok) {
           console.log(`[OTP] Sent via Slack DM to ${email}`);
           return;
         }
+        console.warn(`[OTP] Slack message failed for ${email}:`, msg.error, '— falling back to console');
+      } else {
+        console.warn(`[OTP] Slack lookup failed for ${email}:`, lookup.error, '— falling back to console');
       }
-      console.warn(`[OTP] Slack lookup failed for ${email}:`, lookup.error, '— falling back to console');
     } catch (err) {
       console.warn('[OTP] Slack error:', err.message, '— falling back to console');
     }
