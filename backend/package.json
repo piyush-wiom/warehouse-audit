@@ -1,0 +1,28 @@
+{
+  "name": "warehouse-audit-backend",
+  "version": "1.0.0",
+  "main": "src/index.js",
+  "scripts": {
+    "dev": "nodemon src/index.js",
+    "start": "node src/index.js",
+    "db:push": "prisma db push",
+    "db:generate": "prisma generate",
+    "db:migrate": "prisma migrate dev --name init",
+    "db:studio": "prisma studio"
+  },
+  "dependencies": {
+    "@prisma/client": "5.22.0",
+    "cors": "2.8.5",
+    "csv-parser": "3.0.0",
+    "dotenv": "16.4.7",
+    "express": "4.21.2",
+    "jsonwebtoken": "9.0.2",
+    "multer": "1.4.5-lts.1",
+    "nodemailer": "6.9.16",
+    "xlsx": "0.18.5"
+  },
+  "devDependencies": {
+    "nodemon": "3.1.9",
+    "prisma": "5.22.0"
+  }
+}
