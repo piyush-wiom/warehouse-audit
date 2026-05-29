@@ -1,43 +1,62 @@
 const express = require('express');
 const router = express.Router();
 const jwt = require('jsonwebtoken');
-const nodemailer = require('nodemailer');
+const https = require('https');
 const prisma = require('../lib/prisma');
 
 function generateOtp() {
   return String(Math.floor(100000 + Math.random() * 900000));
 }
 
-async function sendOtpEmail(email, otp) {
-  if (process.env.SENDGRID_API_KEY) {
-    const transporter = nodemailer.createTransport({
-      host: 'smtp.sendgrid.net',
-      port: 587,
-      auth: { user: 'apikey', pass: process.env.SENDGRID_API_KEY },
+async function slackApiCall(method, body) {
+  return new Promise((resolve, reject) => {
+    const payload = JSON.stringify(body);
+    const req = https.request({
+      hostname: 'slack.com',
+      path: `/api/${method}`,
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${process.env.SLACK_BOT_TOKEN}`,
+        'Content-Length': Buffer.byteLength(payload),
+      },
+    }, res => {
+      let data = '';
+      res.on('data', chunk => data += chunk);
+      res.on('end', () => resolve(JSON.parse(data)));
     });
-    await transporter.sendMail({
-      from: process.env.EMAIL_FROM || 'noreply@warehouse-audit.com',
-      to: email,
-      subject: 'Your Warehouse Audit OTP',
-      text: `Your OTP is: ${otp}\n\nValid for 5 minutes.`,
-      html: `<h2>Warehouse Audit Login</h2><p>Your OTP is: <strong style="font-size:24px">${otp}</strong></p><p>Valid for 5 minutes.</p>`,
-    });
-  } else if (process.env.SMTP_HOST) {
-    const transporter = nodemailer.createTransport({
-      host: process.env.SMTP_HOST,
-      port: Number(process.env.SMTP_PORT) || 587,
-      auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
-    });
-    await transporter.sendMail({
-      from: process.env.EMAIL_FROM || process.env.SMTP_USER,
-      to: email,
-      subject: 'Your Warehouse Audit OTP',
-      text: `Your OTP is: ${otp}\n\nValid for 5 minutes.`,
-    });
-  } else {
-    // Dev fallback — print to console
-    console.log(`\n[OTP] Email: ${email} | OTP: ${otp}\n`);
+    req.on('error', reject);
+    req.write(payload);
+    req.end();
+  });
+}
+
+async function sendOtp(email, otp) {
+  // Priority 1: Slack DM by email
+  if (process.env.SLACK_BOT_TOKEN) {
+    try {
+      const lookup = await slackApiCall('users.lookupByEmail', { email });
+      if (lookup.ok) {
+        const slackUserId = lookup.user.id;
+        // Open DM channel
+        const dm = await slackApiCall('conversations.open', { users: slackUserId });
+        if (dm.ok) {
+          await slackApiCall('chat.postMessage', {
+            channel: dm.channel.id,
+            text: `🔐 *Warehouse Audit Login OTP*\n\nYour OTP is: *${otp}*\n\nValid for 5 minutes. Do not share this with anyone.`,
+          });
+          console.log(`[OTP] Sent via Slack DM to ${email}`);
+          return;
+        }
+      }
+      console.warn(`[OTP] Slack lookup failed for ${email}:`, lookup.error, '— falling back to console');
+    } catch (err) {
+      console.warn('[OTP] Slack error:', err.message, '— falling back to console');
+    }
   }
+
+  // Fallback — print to console (dev / no Slack configured)
+  console.log(`\n[OTP] Email: ${email} | OTP: ${otp}\n`);
 }
 
 // POST /api/auth/send-otp
@@ -61,7 +80,7 @@ router.post('/send-otp', async (req, res) => {
     const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
 
     await prisma.otpToken.create({ data: { email, otp, expiresAt } });
-    await sendOtpEmail(email, otp);
+    await sendOtp(email, otp);
 
     res.json({ message: 'OTP sent successfully' });
   } catch (err) {
