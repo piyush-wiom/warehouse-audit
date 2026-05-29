@@ -8,15 +8,23 @@ function generateOtp() {
   return String(Math.floor(100000 + Math.random() * 900000));
 }
 
-async function slackApiCall(method, body) {
+async function slackApiCall(method, body, useForm = false) {
   return new Promise((resolve, reject) => {
-    const payload = JSON.stringify(body);
+    let payload, contentType;
+    if (useForm) {
+      // Form-encoded (required for users.lookupByEmail)
+      payload = Object.entries(body).map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join('&');
+      contentType = 'application/x-www-form-urlencoded';
+    } else {
+      payload = JSON.stringify(body);
+      contentType = 'application/json';
+    }
     const req = https.request({
       hostname: 'slack.com',
       path: `/api/${method}`,
       method: 'POST',
       headers: {
-        'Content-Type': 'application/json',
+        'Content-Type': contentType,
         'Authorization': `Bearer ${process.env.SLACK_BOT_TOKEN}`,
         'Content-Length': Buffer.byteLength(payload),
       },
@@ -35,7 +43,7 @@ async function sendOtp(email, otp) {
   // Priority 1: Slack DM by email
   if (process.env.SLACK_BOT_TOKEN) {
     try {
-      const lookup = await slackApiCall('users.lookupByEmail', { email });
+      const lookup = await slackApiCall('users.lookupByEmail', { email }, true);
       if (lookup.ok) {
         const slackUserId = lookup.user.id;
         // Open DM channel
