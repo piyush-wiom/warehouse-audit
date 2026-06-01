@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import api from '../../lib/api';
-import { Search, Filter, Package } from 'lucide-react';
+import toast from 'react-hot-toast';
+import { Search, Package, Download } from 'lucide-react';
 
 export default function InventoryViewer() {
   const [warehouses, setWarehouses] = useState([]);
@@ -48,6 +49,30 @@ export default function InventoryViewer() {
     if (filters.warehouse) handleSearch();
   }, [filters.warehouse, filters.bin]);
 
+  function handleDownload() {
+    if (filtered.length === 0) return toast.error('No data to download');
+
+    const headers = ['Warehouse', 'Bin', 'Zone', 'Serial No', 'Mac ID', 'Device ID', 'Type (No2)', 'Description', 'Inventory Type'];
+    const rows = filtered.map(d => [
+      d.locationCode, d.binCode, d.zoneCode || '',
+      d.serialNo || '', d.macId || '', d.deviceId || '',
+      d.no2 || '', `"${(d.description || '').replace(/"/g, '""')}"`,
+      d.inventory || '',
+    ].join(','));
+
+    const csv = '﻿' + [headers.join(','), ...rows].join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    const wh = filters.warehouse.replace(/\s+/g, '_');
+    const bin = filters.bin ? `_${filters.bin}` : '';
+    a.download = `inventory_${wh}${bin}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast.success(`Downloaded ${filtered.length} devices`);
+  }
+
   const filtered = filters.search
     ? devices.filter(d =>
         [d.serialNo, d.macId, d.deviceId, d.description, d.no2]
@@ -68,12 +93,19 @@ export default function InventoryViewer() {
             </p>
           )}
         </div>
-        {total > 0 && (
-          <span className="badge-complete text-sm px-3 py-1">
-            <Package size={14} className="inline mr-1" />
-            {filtered.length} of {total} devices
-          </span>
-        )}
+        <div className="flex items-center gap-2">
+          {total > 0 && (
+            <span className="badge-complete text-sm px-3 py-1">
+              <Package size={14} className="inline mr-1" />
+              {filtered.length} of {total} devices
+            </span>
+          )}
+          {filtered.length > 0 && (
+            <button onClick={handleDownload} className="btn-secondary">
+              <Download size={16} /> Download CSV
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Filters */}
