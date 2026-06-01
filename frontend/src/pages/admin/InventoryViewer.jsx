@@ -7,14 +7,14 @@ export default function InventoryViewer() {
   const [warehouses, setWarehouses] = useState([]);
   const [bins, setBins] = useState([]);
   const [devices, setDevices] = useState([]);
-  const [uploadInfo, setUploadInfo] = useState(null);
-  const [filters, setFilters] = useState({ warehouse: '', bin: '', search: '' });
+  const [uploads, setUploads] = useState([]);
+  const [filters, setFilters] = useState({ warehouse: '', bin: '', search: '', upload_id: '' });
   const [loading, setLoading] = useState(false);
   const [total, setTotal] = useState(0);
 
   useEffect(() => {
     api.get('/inventory/warehouses').then(r => setWarehouses(r.data)).catch(() => {});
-    api.get('/inventory/upload-info').then(r => setUploadInfo(r.data)).catch(() => {});
+    api.get('/inventory/uploads').then(r => setUploads(r.data)).catch(() => {});
   }, []);
 
   async function handleWarehouseChange(warehouse) {
@@ -35,6 +35,7 @@ export default function InventoryViewer() {
       const params = { warehouse: filters.warehouse };
       if (filters.bin) params.bin = filters.bin;
       if (filters.search) params.search = filters.search;
+      if (filters.upload_id) params.upload_id = filters.upload_id;
       const { data } = await api.get('/inventory/devices-view', { params });
       setDevices(data.devices);
       setTotal(data.total);
@@ -47,7 +48,7 @@ export default function InventoryViewer() {
 
   useEffect(() => {
     if (filters.warehouse) handleSearch();
-  }, [filters.warehouse, filters.bin]);
+  }, [filters.warehouse, filters.bin, filters.upload_id]);
 
   function handleDownload() {
     if (filtered.length === 0) return toast.error('No data to download');
@@ -85,11 +86,14 @@ export default function InventoryViewer() {
       <div className="flex items-center justify-between mb-6">
         <div>
           <h2 className="text-xl font-bold text-gray-900">Inventory Data</h2>
-          {uploadInfo && (
+          {uploads.length > 0 && (
             <p className="text-sm text-gray-500 mt-0.5">
-              Last uploaded: <strong>{uploadInfo.filename}</strong> on{' '}
-              {new Date(uploadInfo.createdAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}
-              {' '}by {uploadInfo.uploadedBy}
+              {filters.upload_id ? (() => {
+                const u = uploads.find(u => u.id === filters.upload_id);
+                return u ? <>Viewing: <strong>{u.filename}</strong> uploaded on {new Date(u.createdAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })} · {u.totalDevices} devices</> : null;
+              })() : (
+                <>Latest upload: <strong>{uploads[0].filename}</strong> on {new Date(uploads[0].createdAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })} · {uploads[0].totalDevices} devices</>
+              )}
             </p>
           )}
         </div>
@@ -110,7 +114,18 @@ export default function InventoryViewer() {
 
       {/* Filters */}
       <div className="card mb-4 p-4">
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+          <div>
+            <label className="label">Upload Date</label>
+            <select className="input" value={filters.upload_id} onChange={e => setFilters(f => ({ ...f, upload_id: e.target.value }))}>
+              <option value="">All uploads</option>
+              {uploads.map(u => (
+                <option key={u.id} value={u.id}>
+                  {new Date(u.createdAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })} — {u.filename} ({u.totalDevices} devices)
+                </option>
+              ))}
+            </select>
+          </div>
           <div>
             <label className="label">Warehouse</label>
             <select className="input" value={filters.warehouse} onChange={e => handleWarehouseChange(e.target.value)}>

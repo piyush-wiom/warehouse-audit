@@ -155,6 +155,19 @@ router.get('/devices/:warehouse/:bin', requireAuth, async (req, res) => {
   res.json(devices);
 });
 
+// GET /api/inventory/uploads — all upload records for date filter
+router.get('/uploads', requireAdmin, async (req, res) => {
+  const uploads = await prisma.inventoryUpload.findMany({
+    orderBy: { createdAt: 'desc' },
+  });
+  // Add device count per upload
+  const enriched = await Promise.all(uploads.map(async u => {
+    const count = await prisma.inventory.count({ where: { uploadId: u.id } });
+    return { ...u, totalDevices: count };
+  }));
+  res.json(enriched);
+});
+
 // GET /api/inventory/upload-info — latest upload metadata
 router.get('/upload-info', requireAdmin, async (req, res) => {
   const upload = await prisma.inventoryUpload.findFirst({ orderBy: { createdAt: 'desc' } });
@@ -165,11 +178,12 @@ router.get('/upload-info', requireAdmin, async (req, res) => {
 
 // GET /api/inventory/devices-view — paginated device viewer for admin
 router.get('/devices-view', requireAdmin, async (req, res) => {
-  const { warehouse, bin, search } = req.query;
+  const { warehouse, bin, search, upload_id } = req.query;
   if (!warehouse) return res.status(400).json({ error: 'warehouse required' });
 
   const where = { locationCode: warehouse };
   if (bin) where.binCode = bin;
+  if (upload_id) where.uploadId = upload_id;
   if (search) {
     where.OR = [
       { serialNo: { contains: search, mode: 'insensitive' } },
