@@ -3,10 +3,7 @@ const router = express.Router();
 const prisma = require('../lib/prisma');
 const { requireAuth, requireAdmin } = require('../middleware/auth');
 
-const SCAN_CONFIG = {
-  urlPattern: 'http://netbox.wiom.in',
-  serialIndex: 3,
-};
+const SCAN_CONFIG = { urlPattern: 'http://netbox.wiom.in', serialIndex: 3 };
 
 function detectScanType(rawInput) {
   if (rawInput.includes(SCAN_CONFIG.urlPattern)) return 'QR';
@@ -27,25 +24,37 @@ function normalizeMAC(val) {
 
 function matchAgainstInventory(extractedSerial, inventoryRows) {
   const normInput = normalizeMAC(extractedSerial);
-
   for (const row of inventoryRows) {
-    if (row.serialNo && row.serialNo.toUpperCase() === extractedSerial.toUpperCase()) {
-      return { row, matchField: 'serialNo' };
-    }
-    if (row.macId && normalizeMAC(row.macId) === normInput) {
-      return { row, matchField: 'macId' };
-    }
-    if (row.deviceId && row.deviceId.toUpperCase() === extractedSerial.toUpperCase()) {
-      return { row, matchField: 'deviceId' };
-    }
+    if (row.serialNo && row.serialNo.toUpperCase() === extractedSerial.toUpperCase()) return { row, matchField: 'serialNo' };
+    if (row.macId && normalizeMAC(row.macId) === normInput) return { row, matchField: 'macId' };
+    if (row.deviceId && row.deviceId.toUpperCase() === extractedSerial.toUpperCase()) return { row, matchField: 'deviceId' };
   }
   return null;
 }
 
-function computeBinStats(inventoryRows, scans) {
+// Get ALL historical scans for a bin across all sessions for a warehouse
+async function getAllBinScans(warehouse, binCode) {
+  const sessions = await prisma.auditSession.findMany({
+    where: { warehouse },
+    select: { id: true },
+  });
+  const sessionIds = sessions.map(s => s.id);
+  if (sessionIds.length === 0) return [];
+  return prisma.scannedDevice.findMany({
+    where: { sessionId: { in: sessionIds }, binCode },
+    orderBy: { scannedAt: 'asc' },
+  });
+}
+
+function computeBinStats(inventoryRows, allScans, currentSessionScans) {
   const expected = inventoryRows.length;
-  const matched = scans.filter(s => s.matched).length;
-  const variance = scans.filter(s => !s.matched).length;
+  // All matched across all sessions (deduplicated by inventory row)
+  const allMatchedSerials = new Set(
+    allScans.filter(s => s.matched && s.serialNo).map(s => s.serialNo.toUpperCase())
+  );
+  const matched = allMatchedSerials.size;
+  // Variance = unmatched scans in CURRENT session only
+  const variance = currentSessionScans.filter(s => !s.matched).length;
   const remaining = Math.max(0, expected - matched);
   const totalScanned = matched + variance;
   return { expected, matched, variance, remaining, totalScanned };
@@ -80,7 +89,8 @@ router.post('/:id/scan', requireAuth, async (req, res) => {
 
     const session = await prisma.auditSession.findUnique({ where: { id } });
     if (!session) return res.status(404).json({ error: 'Session not found' });
-    if (session.endTime) return res.status(400).json({ error: 'Session already ended' });
+    // Fix 3: Block scanning on ended sessions
+    if (session.endTime) return res.status(400).json({ error: 'This audit session has ended. Bin is locked.' });
 
     const scanType = manualType === 'Manual' ? 'Manual' : detectScanType(raw_input);
     const extractedSerial = extractSerial(raw_input, scanType);
@@ -89,15 +99,12 @@ router.post('/:id/scan', requireAuth, async (req, res) => {
       where: { locationCode: session.warehouse, binCode: bin_code },
     });
 
-    // Get all successful scans in this session for this bin
-    const priorMatchedScans = await prisma.scannedDevice.findMany({
-      where: { sessionId: id, binCode: bin_code, matched: true },
-    });
-
+    // Fix 4: Get ALL historical scans across all sessions for duplicate check
+    const allHistoricalScans = await getAllBinScans(session.warehouse, bin_code);
     const normInput = normalizeMAC(extractedSerial);
 
-    // Cross-ID duplicate detection
-    for (const s of priorMatchedScans) {
+    // Cross-ID duplicate detection across ALL sessions
+    for (const s of allHistoricalScans.filter(s => s.matched)) {
       const fields = [s.extractedSerial, s.serialNo, s.macId, s.deviceId].filter(Boolean);
       if (fields.some(f => normalizeMAC(f) === normInput)) {
         return res.json({
@@ -111,11 +118,13 @@ router.post('/:id/scan', requireAuth, async (req, res) => {
 
     if (match) {
       const { row } = match;
-      // Check if this specific inventory row already matched
-      const rowAlreadyMatched = priorMatchedScans.find(s =>
-        normalizeMAC(s.serialNo || '') === normalizeMAC(row.serialNo || '') ||
-        normalizeMAC(s.macId || '') === normalizeMAC(row.macId || '') ||
-        normalizeMAC(s.deviceId || '') === normalizeMAC(row.deviceId || '')
+      // Check if this inventory row already matched in any session
+      const rowAlreadyMatched = allHistoricalScans.find(s =>
+        s.matched && (
+          normalizeMAC(s.serialNo || '') === normalizeMAC(row.serialNo || '') ||
+          normalizeMAC(s.macId || '') === normalizeMAC(row.macId || '') ||
+          normalizeMAC(s.deviceId || '') === normalizeMAC(row.deviceId || '')
+        )
       );
       if (rowAlreadyMatched) {
         return res.json({
@@ -126,40 +135,25 @@ router.post('/:id/scan', requireAuth, async (req, res) => {
 
       const scan = await prisma.scannedDevice.create({
         data: {
-          sessionId: id,
-          binCode: bin_code,
-          warehouse: session.warehouse,
-          rawInput: raw_input,
-          extractedSerial,
-          matched: true,
-          deviceType: row.no2,
-          serialNo: row.serialNo,
-          macId: row.macId,
-          deviceId: row.deviceId,
-          scanType,
+          sessionId: id, binCode: bin_code, warehouse: session.warehouse,
+          rawInput: raw_input, extractedSerial, matched: true,
+          deviceType: row.no2, serialNo: row.serialNo, macId: row.macId,
+          deviceId: row.deviceId, scanType,
         },
       });
-
       return res.json({
         status: 'matched',
         message: `✓ Matched: ${extractedSerial} | ${row.no2 || ''} | ${row.description || ''} | ${scanType}`,
-        scan,
-        inventory: row,
+        scan, inventory: row,
       });
     }
 
     const scan = await prisma.scannedDevice.create({
       data: {
-        sessionId: id,
-        binCode: bin_code,
-        warehouse: session.warehouse,
-        rawInput: raw_input,
-        extractedSerial,
-        matched: false,
-        scanType,
+        sessionId: id, binCode: bin_code, warehouse: session.warehouse,
+        rawInput: raw_input, extractedSerial, matched: false, scanType,
       },
     });
-
     res.json({
       status: 'variance',
       message: `⚠ ${extractedSerial} not found in this bin — counted as variance`,
@@ -180,15 +174,13 @@ router.post('/:id/end', requireAuth, async (req, res) => {
     include: { scans: true },
   });
 
-  // Build per-bin summary
   const bins = [...new Set(session.scans.map(s => s.binCode))];
   const summary = await Promise.all(
     bins.map(async binCode => {
-      const inventoryRows = await prisma.inventory.findMany({
-        where: { locationCode: session.warehouse, binCode },
-      });
-      const scans = session.scans.filter(s => s.binCode === binCode);
-      const stats = computeBinStats(inventoryRows, scans);
+      const inventoryRows = await prisma.inventory.findMany({ where: { locationCode: session.warehouse, binCode } });
+      const allScans = await getAllBinScans(session.warehouse, binCode);
+      const currentScans = session.scans.filter(s => s.binCode === binCode);
+      const stats = computeBinStats(inventoryRows, allScans, currentScans);
       const status = computeBinStatus(stats, true);
       return { binCode, ...stats, status };
     })
@@ -229,19 +221,23 @@ router.get('/:id', requireAuth, async (req, res) => {
 });
 
 // GET /api/sessions/:id/bin-stats/:binCode
+// Fix 4: Aggregates stats across ALL historical sessions for this bin
 router.get('/:id/bin-stats/:binCode', requireAuth, async (req, res) => {
   const { id, binCode } = req.params;
   const session = await prisma.auditSession.findUnique({ where: { id } });
   if (!session) return res.status(404).json({ error: 'Session not found' });
 
-  const [inventoryRows, scans] = await Promise.all([
+  const [inventoryRows, allScans, currentScans] = await Promise.all([
     prisma.inventory.findMany({ where: { locationCode: session.warehouse, binCode } }),
+    getAllBinScans(session.warehouse, binCode),
     prisma.scannedDevice.findMany({ where: { sessionId: id, binCode }, orderBy: { scannedAt: 'desc' } }),
   ]);
 
-  const stats = computeBinStats(inventoryRows, scans);
+  const stats = computeBinStats(inventoryRows, allScans, currentScans);
   const status = computeBinStatus(stats, !!session.endTime);
-  res.json({ ...stats, status, scans });
+  const sessionEnded = !!session.endTime;
+
+  res.json({ ...stats, status, sessionEnded, scans: currentScans, allScans });
 });
 
 module.exports = router;

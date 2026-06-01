@@ -128,7 +128,22 @@ router.get('/bins/:warehouse', requireAuth, async (req, res) => {
     distinct: ['binCode'],
     orderBy: { binCode: 'asc' },
   });
-  res.json(rows);
+
+  // Enrich with assignment info
+  const assignments = await prisma.assignment.findMany({
+    where: { warehouse: req.params.warehouse },
+    select: { binCode: true, assignedTo: true },
+  });
+  const assignedMap = {};
+  for (const a of assignments) assignedMap[a.binCode] = a.assignedTo;
+
+  const enriched = rows.map(r => ({
+    ...r,
+    isAssigned: !!assignedMap[r.binCode],
+    assignedTo: assignedMap[r.binCode] || null,
+  }));
+
+  res.json(enriched);
 });
 
 // GET /api/inventory/devices/:warehouse/:bin

@@ -1,22 +1,39 @@
 import { useEffect, useState } from 'react';
 import api from '../../lib/api';
-import { Download, Filter } from 'lucide-react';
+import { Download, Filter, Calendar } from 'lucide-react';
 
 const STATUS_BADGE = {
-  Complete: 'badge-complete',
-  Short: 'badge-short',
-  Excess: 'badge-excess',
-  Variance: 'badge-variance',
-  Pending: 'badge-pending',
-  Scanning: 'badge-scanning',
+  Complete: 'badge-complete', Short: 'badge-short', Excess: 'badge-excess',
+  Variance: 'badge-variance', Pending: 'badge-pending', Scanning: 'badge-scanning',
   Corrected: 'badge-corrected',
 };
+
+function DateInput({ label, value, onChange }) {
+  return (
+    <div className="flex items-center gap-1">
+      <label className="text-xs text-gray-500 whitespace-nowrap">{label}</label>
+      <input type="date" className="input py-1 text-sm" value={value} onChange={e => onChange(e.target.value)} />
+    </div>
+  );
+}
 
 export default function Reconciliation() {
   const [rows, setRows] = useState([]);
   const [warehouses, setWarehouses] = useState([]);
-  const [filters, setFilters] = useState({ warehouse: '', status: '' });
+  const [filters, setFilters] = useState({ warehouse: '', status: '', date_from: '', date_to: '' });
   const [loading, setLoading] = useState(true);
+
+  // Default: last 3 months
+  useEffect(() => {
+    const today = new Date();
+    const threeMonthsAgo = new Date();
+    threeMonthsAgo.setMonth(today.getMonth() - 3);
+    setFilters(f => ({
+      ...f,
+      date_from: threeMonthsAgo.toISOString().slice(0, 10),
+      date_to: today.toISOString().slice(0, 10),
+    }));
+  }, []);
 
   async function load() {
     setLoading(true);
@@ -24,6 +41,8 @@ export default function Reconciliation() {
       const params = {};
       if (filters.warehouse) params.warehouse = filters.warehouse;
       if (filters.status) params.status = filters.status;
+      if (filters.date_from) params.date_from = filters.date_from;
+      if (filters.date_to) params.date_to = filters.date_to;
       const { data } = await api.get('/reconciliation', { params });
       setRows(data);
       const ws = [...new Set(data.map(r => r.warehouse))];
@@ -35,12 +54,16 @@ export default function Reconciliation() {
     }
   }
 
-  useEffect(() => { load(); }, [filters]);
+  useEffect(() => {
+    if (filters.date_from || filters.date_to || true) load();
+  }, [filters]);
 
   async function handleExport() {
     const params = new URLSearchParams();
     if (filters.warehouse) params.set('warehouse', filters.warehouse);
     if (filters.status) params.set('status', filters.status);
+    if (filters.date_from) params.set('date_from', filters.date_from);
+    if (filters.date_to) params.set('date_to', filters.date_to);
     window.open(`/api/reconciliation/export?${params}`, '_blank');
   }
 
@@ -51,7 +74,7 @@ export default function Reconciliation() {
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex items-center justify-between mb-4">
         <h2 className="text-xl font-bold text-gray-900">Reconciliation</h2>
         <button onClick={handleExport} className="btn-secondary">
           <Download size={16} /> Export CSV
@@ -72,38 +95,52 @@ export default function Reconciliation() {
       </div>
 
       {/* Filters */}
-      <div className="card mb-4 flex flex-wrap gap-3 items-center p-4">
-        <Filter size={16} className="text-gray-400" />
-        <select
-          className="input w-auto"
-          value={filters.warehouse}
-          onChange={e => setFilters(f => ({ ...f, warehouse: e.target.value }))}
-        >
-          <option value="">All Warehouses</option>
-          {warehouses.map(w => <option key={w} value={w}>{w}</option>)}
-        </select>
-        <select
-          className="input w-auto"
-          value={filters.status}
-          onChange={e => setFilters(f => ({ ...f, status: e.target.value }))}
-        >
-          <option value="">All Statuses</option>
-          {['Complete', 'Short', 'Excess', 'Variance', 'Pending', 'Scanning', 'Corrected'].map(s => (
-            <option key={s} value={s}>{s}</option>
-          ))}
-        </select>
-        {(filters.warehouse || filters.status) && (
-          <button onClick={() => setFilters({ warehouse: '', status: '' })} className="text-sm text-blue-600 hover:underline">
-            Clear filters
-          </button>
-        )}
+      <div className="card mb-4 p-4">
+        <div className="flex flex-wrap gap-3 items-center">
+          <Filter size={16} className="text-gray-400 shrink-0" />
+
+          <select className="input w-auto" value={filters.warehouse}
+            onChange={e => setFilters(f => ({ ...f, warehouse: e.target.value }))}>
+            <option value="">All Warehouses</option>
+            {warehouses.map(w => <option key={w} value={w}>{w}</option>)}
+          </select>
+
+          <select className="input w-auto" value={filters.status}
+            onChange={e => setFilters(f => ({ ...f, status: e.target.value }))}>
+            <option value="">All Statuses</option>
+            {['Complete', 'Short', 'Excess', 'Variance', 'Pending', 'Scanning', 'Corrected'].map(s => (
+              <option key={s} value={s}>{s}</option>
+            ))}
+          </select>
+
+          <div className="flex items-center gap-2 flex-wrap">
+            <Calendar size={14} className="text-gray-400" />
+            <DateInput label="From" value={filters.date_from}
+              onChange={v => setFilters(f => ({ ...f, date_from: v }))} />
+            <DateInput label="To" value={filters.date_to}
+              onChange={v => setFilters(f => ({ ...f, date_to: v }))} />
+          </div>
+
+          {(filters.warehouse || filters.status || filters.date_from || filters.date_to) && (
+            <button onClick={() => {
+              const today = new Date().toISOString().slice(0, 10);
+              const ago = new Date(); ago.setMonth(ago.getMonth() - 3);
+              setFilters({ warehouse: '', status: '', date_from: ago.toISOString().slice(0, 10), date_to: today });
+            }} className="text-sm text-blue-600 hover:underline">
+              Reset filters
+            </button>
+          )}
+        </div>
+        <p className="text-xs text-gray-400 mt-2 flex items-center gap-1">
+          <Calendar size={11} /> Showing audit data for selected date range (default: last 3 months)
+        </p>
       </div>
 
       <div className="card overflow-x-auto p-0">
         <table className="w-full text-sm">
           <thead className="bg-gray-50 border-b border-gray-200">
             <tr>
-              {['Warehouse', 'Bin', 'Expected', 'Matched', 'Variance', 'Remaining', 'Scanned', 'Status', 'Re-audit Var', 'Auditor', 'Correction'].map(h => (
+              {['Warehouse', 'Bin', 'Audit Date', 'Expected', 'Matched', 'Variance', 'Remaining', 'Scanned', 'Status', 'Auditor', 'Correction'].map(h => (
                 <th key={h} className="px-3 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">{h}</th>
               ))}
             </tr>
@@ -115,6 +152,9 @@ export default function Reconciliation() {
               <tr key={i} className="hover:bg-gray-50">
                 <td className="px-3 py-2.5 font-medium whitespace-nowrap">{r.warehouse}</td>
                 <td className="px-3 py-2.5 font-mono text-xs">{r.bin}</td>
+                <td className="px-3 py-2.5 text-xs text-gray-500 whitespace-nowrap">
+                  {r.sessionDate ? new Date(r.sessionDate).toLocaleDateString('en-IN') : '—'}
+                </td>
                 <td className="px-3 py-2.5 text-center">{r.expected}</td>
                 <td className="px-3 py-2.5 text-center text-green-700 font-medium">{r.matched}</td>
                 <td className="px-3 py-2.5 text-center text-red-700 font-medium">{r.variance}</td>
@@ -123,7 +163,6 @@ export default function Reconciliation() {
                 <td className="px-3 py-2.5">
                   <span className={STATUS_BADGE[r.finalStatus] || 'badge-pending'}>{r.finalStatus}</span>
                 </td>
-                <td className="px-3 py-2.5 text-center">{r.reauditVariance ?? '—'}</td>
                 <td className="px-3 py-2.5 text-gray-500 text-xs truncate max-w-[120px]">{r.auditor || '—'}</td>
                 <td className="px-3 py-2.5 text-gray-500 text-xs max-w-[160px] truncate">
                   {r.correction ? r.correction.remark : '—'}
@@ -131,7 +170,7 @@ export default function Reconciliation() {
               </tr>
             ))}
             {!loading && rows.length === 0 && (
-              <tr><td colSpan={11} className="px-4 py-8 text-center text-gray-400">No data. Upload inventory first.</td></tr>
+              <tr><td colSpan={11} className="px-4 py-8 text-center text-gray-400">No data for selected filters.</td></tr>
             )}
           </tbody>
         </table>
