@@ -3,6 +3,27 @@ const router = express.Router();
 const prisma = require('../lib/prisma');
 const { requireAdmin } = require('../middleware/auth');
 
+// Format date as DD-MM-YYYY to avoid Excel MM/DD confusion
+function fmtDate(d) {
+  if (!d) return '';
+  const dt = new Date(d);
+  const dd = String(dt.getDate()).padStart(2, '0');
+  const mm = String(dt.getMonth() + 1).padStart(2, '0');
+  const yyyy = dt.getFullYear();
+  return `${dd}-${mm}-${yyyy}`;
+}
+
+function fmtDateTime(d) {
+  if (!d) return '';
+  const dt = new Date(d);
+  const dd = String(dt.getDate()).padStart(2, '0');
+  const mm = String(dt.getMonth() + 1).padStart(2, '0');
+  const yyyy = dt.getFullYear();
+  const hh = String(dt.getHours()).padStart(2, '0');
+  const min = String(dt.getMinutes()).padStart(2, '0');
+  return `${dd}-${mm}-${yyyy} ${hh}:${min}`;
+}
+
 function computeBinStatus(matched, expected, variance, sessionEnded) {
   if (!sessionEnded) return 'Scanning';
   if (matched === expected && variance === 0) return 'Complete';
@@ -125,7 +146,7 @@ router.get('/export', requireAdmin, async (req, res) => {
       ...data.map(r =>
         [
           r.warehouse, r.bin,
-          r.sessionDate ? new Date(r.sessionDate).toLocaleDateString('en-IN') : '',
+          r.sessionDate ? fmtDate(r.sessionDate) : '',
           r.expected, r.matched, r.variance, r.remaining, r.totalScanned,
           r.originalStatus, r.finalStatus,
           r.reauditVariance ?? '', r.reauditBy ?? '', r.auditor ?? '',
@@ -219,7 +240,7 @@ router.get('/export-detailed', requireAdmin, async (req, res) => {
 
       if (status && binStatus !== status) continue;
 
-      const auditDate = latestSess ? new Date(latestSess.startTime).toLocaleDateString('en-IN') : '';
+      const auditDate = latestSess ? fmtDate(latestSess.startTime) : '';
 
       // 1. Matched
       for (const scan of scans.filter(s => s.matched)) {
@@ -230,7 +251,7 @@ router.get('/export-detailed', requireAdmin, async (req, res) => {
           scan.serialNo || '', scan.macId || '', scan.deviceId || '',
           `"${(inv?.description || '').replace(/"/g, '""')}"`,
           inv?.no2 || '', inv?.inventory || '',
-          scan.scanType || '', new Date(scan.scannedAt).toLocaleString('en-IN'),
+          scan.scanType || '', fmtDateTime(scan.scannedAt),
           sess?.auditorEmail || '',
         ].join(','));
       }
@@ -253,7 +274,7 @@ router.get('/export-detailed', requireAdmin, async (req, res) => {
         csvRows.push([
           wh, bin, auditDate, binStatus, 'Variance',
           scan.extractedSerial || '', '', '', '', '', '',
-          scan.scanType || '', new Date(scan.scannedAt).toLocaleString('en-IN'),
+          scan.scanType || '', fmtDateTime(scan.scannedAt),
           sess?.auditorEmail || '',
         ].join(','));
       }
