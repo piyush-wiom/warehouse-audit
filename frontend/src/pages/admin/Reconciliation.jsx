@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import api from '../../lib/api';
+import toast from 'react-hot-toast';
 import { Download, Filter, Calendar } from 'lucide-react';
 
 const STATUS_BADGE = {
@@ -59,12 +60,29 @@ export default function Reconciliation() {
   }, [filters]);
 
   async function handleExport() {
-    const params = new URLSearchParams();
-    if (filters.warehouse) params.set('warehouse', filters.warehouse);
-    if (filters.status) params.set('status', filters.status);
-    if (filters.date_from) params.set('date_from', filters.date_from);
-    if (filters.date_to) params.set('date_to', filters.date_to);
-    window.open(`/api/reconciliation/export?${params}`, '_blank');
+    try {
+      const params = {};
+      if (filters.warehouse) params.warehouse = filters.warehouse;
+      if (filters.status) params.status = filters.status;
+      if (filters.date_from) params.date_from = filters.date_from;
+      if (filters.date_to) params.date_to = filters.date_to;
+
+      const { data } = await api.get('/reconciliation/export', {
+        params,
+        responseType: 'blob',
+      });
+
+      const today = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+      const url = URL.createObjectURL(new Blob([data], { type: 'text/csv' }));
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `reconciliation_${today}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      toast.error('Export failed');
+      console.error(err);
+    }
   }
 
   const summary = rows.reduce((acc, r) => {
