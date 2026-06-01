@@ -9,6 +9,7 @@ import Inventory from './pages/admin/Inventory';
 import Assignments from './pages/admin/Assignments';
 import Reconciliation from './pages/admin/Reconciliation';
 import Corrections from './pages/admin/Corrections';
+import InventoryViewer from './pages/admin/InventoryViewer';
 import AuditorDashboard from './pages/auditor/AuditorDashboard';
 import ScanBin from './pages/auditor/ScanBin';
 import ReauditBins from './pages/auditor/ReauditBins';
@@ -39,6 +40,7 @@ export default function App() {
       <Route path="/admin" element={<AdminLayout><AdminDashboard /></AdminLayout>} />
       <Route path="/admin/users" element={<AdminLayout><Users /></AdminLayout>} />
       <Route path="/admin/inventory" element={<AdminLayout><Inventory /></AdminLayout>} />
+      <Route path="/admin/inventory-view" element={<AdminLayout><InventoryViewer /></AdminLayout>} />
       <Route path="/admin/assignments" element={<AdminLayout><Assignments /></AdminLayout>} />
       <Route path="/admin/reconciliation" element={<AdminLayout><Reconciliation /></AdminLayout>} />
       <Route path="/admin/corrections" element={<AdminLayout><Corrections /></AdminLayout>} />

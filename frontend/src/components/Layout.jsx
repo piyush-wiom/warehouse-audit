@@ -4,7 +4,7 @@ import api from '../lib/api';
 import toast from 'react-hot-toast';
 import {
   LayoutDashboard, Users, Upload, ClipboardList,
-  BarChart2, CheckSquare, LogOut, Menu, X, ScanLine,
+  BarChart2, CheckSquare, LogOut, Menu, X, ScanLine, Package,
 } from 'lucide-react';
 import { useState } from 'react';
 
@@ -12,6 +12,7 @@ const adminNav = [
   { to: '/admin', icon: LayoutDashboard, label: 'Dashboard' },
   { to: '/admin/users', icon: Users, label: 'Users' },
   { to: '/admin/inventory', icon: Upload, label: 'Inventory' },
+  { to: '/admin/inventory-view', icon: Package, label: 'View Inventory' },
   { to: '/admin/assignments', icon: ClipboardList, label: 'Assignments' },
   { to: '/admin/reconciliation', icon: BarChart2, label: 'Reconciliation' },
   { to: '/admin/corrections', icon: CheckSquare, label: 'Corrections' },

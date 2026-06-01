@@ -155,4 +155,41 @@ router.get('/devices/:warehouse/:bin', requireAuth, async (req, res) => {
   res.json(devices);
 });
 
+// GET /api/inventory/upload-info — latest upload metadata
+router.get('/upload-info', requireAdmin, async (req, res) => {
+  const upload = await prisma.inventoryUpload.findFirst({ orderBy: { createdAt: 'desc' } });
+  if (!upload) return res.json(null);
+  const count = await prisma.inventory.count();
+  res.json({ ...upload, totalDevices: count });
+});
+
+// GET /api/inventory/devices-view — paginated device viewer for admin
+router.get('/devices-view', requireAdmin, async (req, res) => {
+  const { warehouse, bin, search } = req.query;
+  if (!warehouse) return res.status(400).json({ error: 'warehouse required' });
+
+  const where = { locationCode: warehouse };
+  if (bin) where.binCode = bin;
+  if (search) {
+    where.OR = [
+      { serialNo: { contains: search, mode: 'insensitive' } },
+      { macId: { contains: search, mode: 'insensitive' } },
+      { deviceId: { contains: search, mode: 'insensitive' } },
+      { description: { contains: search, mode: 'insensitive' } },
+      { no2: { contains: search, mode: 'insensitive' } },
+    ];
+  }
+
+  const [total, devices] = await Promise.all([
+    prisma.inventory.count({ where }),
+    prisma.inventory.findMany({
+      where,
+      orderBy: [{ binCode: 'asc' }, { serialNo: 'asc' }],
+      take: 500, // max 500 per view — use bin filter for more
+    }),
+  ]);
+
+  res.json({ total, devices });
+});
+
 module.exports = router;
