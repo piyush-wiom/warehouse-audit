@@ -143,6 +143,106 @@ router.get('/export', requireAdmin, async (req, res) => {
   }
 });
 
+// GET /api/reconciliation/export-detailed — device-level CSV export
+router.get('/export-detailed', requireAdmin, async (req, res) => {
+  try {
+    const { warehouse, status, date_from, date_to } = req.query;
+
+    // Get summary first to apply same filters
+    const summaryData = await buildReconciliation(warehouse, status, date_from, date_to);
+
+    const headers = [
+      'Warehouse', 'Bin', 'Audit Date', 'Bin Status',
+      'Device Status', 'Serial No', 'Mac ID', 'Device ID',
+      'Description', 'Type (No2)', 'Inventory Type',
+      'Scan Type', 'Scanned At', 'Auditor',
+    ];
+
+    const csvRows = [headers.join(',')];
+
+    for (const binRow of summaryData) {
+      // Get inventory for this bin
+      const inventoryRows = await prisma.inventory.findMany({
+        where: { locationCode: binRow.warehouse, binCode: binRow.bin },
+      });
+
+      // Get sessions for date filter
+      const sessionDateFilter = {};
+      if (date_from) sessionDateFilter.gte = new Date(date_from);
+      if (date_to) { const e = new Date(date_to); e.setHours(23,59,59,999); sessionDateFilter.lte = e; }
+
+      const sessions = await prisma.auditSession.findMany({
+        where: {
+          warehouse: binRow.warehouse,
+          ...(Object.keys(sessionDateFilter).length > 0 ? { startTime: sessionDateFilter } : {}),
+        },
+        select: { id: true, startTime: true, auditorEmail: true },
+      });
+      const sessionIds = sessions.map(s => s.id);
+      const sessionMap = Object.fromEntries(sessions.map(s => [s.id, s]));
+
+      const scans = sessionIds.length > 0
+        ? await prisma.scannedDevice.findMany({
+            where: { sessionId: { in: sessionIds }, binCode: binRow.bin },
+          })
+        : [];
+
+      const matchedSerials = new Set(scans.filter(s => s.matched).map(s => (s.serialNo || '').toUpperCase()));
+
+      // 1. Matched devices (scanned & found in inventory)
+      for (const scan of scans.filter(s => s.matched)) {
+        const sess = sessionMap[scan.sessionId];
+        const inv = inventoryRows.find(r => r.serialNo && r.serialNo.toUpperCase() === (scan.serialNo || '').toUpperCase());
+        csvRows.push([
+          binRow.warehouse, binRow.bin,
+          sess ? new Date(sess.startTime).toLocaleDateString('en-IN') : '',
+          binRow.finalStatus,
+          'Matched ✓',
+          scan.serialNo || '', scan.macId || '', scan.deviceId || '',
+          `"${inv?.description || ''}"`, inv?.no2 || '', inv?.inventory || '',
+          scan.scanType || '', new Date(scan.scannedAt).toLocaleString('en-IN'),
+          sess?.auditorEmail || '',
+        ].join(','));
+      }
+
+      // 2. Missing devices (in inventory but NOT scanned)
+      for (const inv of inventoryRows) {
+        if (!inv.serialNo || matchedSerials.has(inv.serialNo.toUpperCase())) continue;
+        csvRows.push([
+          binRow.warehouse, binRow.bin, '', binRow.finalStatus,
+          'Missing ✗',
+          inv.serialNo || '', inv.macId || '', inv.deviceId || '',
+          `"${inv.description || ''}"`, inv.no2 || '', inv.inventory || '',
+          '', '', '',
+        ].join(','));
+      }
+
+      // 3. Variance devices (scanned but NOT in inventory)
+      for (const scan of scans.filter(s => !s.matched)) {
+        const sess = sessionMap[scan.sessionId];
+        csvRows.push([
+          binRow.warehouse, binRow.bin,
+          sess ? new Date(sess.startTime).toLocaleDateString('en-IN') : '',
+          binRow.finalStatus,
+          'Variance ⚠',
+          scan.extractedSerial || '', '', '',
+          '', '', '',
+          scan.scanType || '', new Date(scan.scannedAt).toLocaleString('en-IN'),
+          sess?.auditorEmail || '',
+        ].join(','));
+      }
+    }
+
+    const today = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', `attachment; filename="reconciliation_detailed_${today}.csv"`);
+    res.send(csvRows.join('\n'));
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/reconciliation/sessions-history — all audit sessions with date filter
 router.get('/sessions-history', requireAdmin, async (req, res) => {
   try {

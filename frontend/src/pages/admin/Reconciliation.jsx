@@ -59,6 +59,34 @@ export default function Reconciliation() {
     if (filters.date_from || filters.date_to || true) load();
   }, [filters]);
 
+  async function handleDetailedExport() {
+    try {
+      const params = {};
+      if (filters.warehouse) params.warehouse = filters.warehouse;
+      if (filters.status) params.status = filters.status;
+      if (filters.date_from) params.date_from = filters.date_from;
+      if (filters.date_to) params.date_to = filters.date_to;
+
+      toast.loading('Generating detailed report…', { id: 'export' });
+      const { data } = await api.get('/reconciliation/export-detailed', {
+        params,
+        responseType: 'blob',
+      });
+
+      const today = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+      const url = URL.createObjectURL(new Blob([data], { type: 'text/csv' }));
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `reconciliation_detailed_${today}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast.success('Detailed report downloaded', { id: 'export' });
+    } catch (err) {
+      toast.error('Export failed', { id: 'export' });
+      console.error(err);
+    }
+  }
+
   async function handleExport() {
     try {
       const params = {};
@@ -94,9 +122,14 @@ export default function Reconciliation() {
     <div>
       <div className="flex items-center justify-between mb-4">
         <h2 className="text-xl font-bold text-gray-900">Reconciliation</h2>
-        <button onClick={handleExport} className="btn-secondary">
-          <Download size={16} /> Export CSV
-        </button>
+        <div className="flex gap-2">
+          <button onClick={handleExport} className="btn-secondary">
+            <Download size={16} /> Summary CSV
+          </button>
+          <button onClick={handleDetailedExport} className="btn-primary">
+            <Download size={16} /> Device-Level CSV
+          </button>
+        </div>
       </div>
 
       {/* Summary pills */}
