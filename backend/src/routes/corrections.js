@@ -6,16 +6,32 @@ const { requireAuth, requireAdmin } = require('../middleware/auth');
 // GET /api/corrections/flagged  (bins with Short / Excess / Variance status)
 router.get('/flagged', requireAdmin, async (req, res) => {
   try {
+    const { warehouse, date_from, date_to } = req.query;
+
     const allBins = await prisma.inventory.groupBy({
       by: ['locationCode', 'binCode'],
+      where: warehouse ? { locationCode: warehouse } : {},
       _count: { id: true },
     });
+
+    // Build session date filter
+    const sessionDateFilter = {};
+    if (date_from) sessionDateFilter.gte = new Date(date_from);
+    if (date_to) {
+      const end = new Date(date_to);
+      end.setHours(23, 59, 59, 999);
+      sessionDateFilter.lte = end;
+    }
 
     const flagged = [];
     for (const { locationCode, binCode, _count } of allBins) {
       const expected = _count.id;
+      const sessionWhere = {
+        warehouse: locationCode,
+        ...(Object.keys(sessionDateFilter).length > 0 ? { startTime: sessionDateFilter } : {}),
+      };
       const session = await prisma.auditSession.findFirst({
-        where: { warehouse: locationCode },
+        where: sessionWhere,
         orderBy: { startTime: 'desc' },
       });
       if (!session || !session.endTime) continue;
