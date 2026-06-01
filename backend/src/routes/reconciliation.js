@@ -143,90 +143,116 @@ router.get('/export', requireAdmin, async (req, res) => {
   }
 });
 
-// GET /api/reconciliation/export-detailed — device-level CSV export
+// GET /api/reconciliation/export-detailed — device-level CSV export (optimized, plain text)
 router.get('/export-detailed', requireAdmin, async (req, res) => {
   try {
     const { warehouse, status, date_from, date_to } = req.query;
 
-    // Get summary first to apply same filters
-    const summaryData = await buildReconciliation(warehouse, status, date_from, date_to);
+    // Build date filter once
+    const sessionDateFilter = {};
+    if (date_from) sessionDateFilter.gte = new Date(date_from);
+    if (date_to) { const e = new Date(date_to); e.setHours(23, 59, 59, 999); sessionDateFilter.lte = e; }
+    const hasDateFilter = Object.keys(sessionDateFilter).length > 0;
+
+    // Fetch everything in 3 bulk queries
+    const [allInventory, allSessions] = await Promise.all([
+      prisma.inventory.findMany({ where: warehouse ? { locationCode: warehouse } : {} }),
+      prisma.auditSession.findMany({
+        where: {
+          ...(warehouse ? { warehouse } : {}),
+          ...(hasDateFilter ? { startTime: sessionDateFilter } : {}),
+        },
+        select: { id: true, startTime: true, auditorEmail: true, warehouse: true, endTime: true },
+      }),
+    ]);
+
+    const sessionIds = allSessions.map(s => s.id);
+    const sessionMap = Object.fromEntries(allSessions.map(s => [s.id, s]));
+
+    const allScans = sessionIds.length > 0
+      ? await prisma.scannedDevice.findMany({ where: { sessionId: { in: sessionIds } } })
+      : [];
+
+    // Group by warehouse::bin
+    const invByBin = {};
+    for (const inv of allInventory) {
+      const key = `${inv.locationCode}::${inv.binCode}`;
+      if (!invByBin[key]) invByBin[key] = [];
+      invByBin[key].push(inv);
+    }
+
+    const scansByBin = {};
+    for (const scan of allScans) {
+      const sess = sessionMap[scan.sessionId];
+      if (!sess) continue;
+      const key = `${sess.warehouse}::${scan.binCode}`;
+      if (!scansByBin[key]) scansByBin[key] = [];
+      scansByBin[key].push(scan);
+    }
 
     const headers = [
-      'Warehouse', 'Bin', 'Audit Date', 'Bin Status',
-      'Device Status', 'Serial No', 'Mac ID', 'Device ID',
-      'Description', 'Type (No2)', 'Inventory Type',
-      'Scan Type', 'Scanned At', 'Auditor',
+      'Warehouse', 'Bin', 'Audit Date', 'Bin Status', 'Device Status',
+      'Serial No', 'Mac ID', 'Device ID', 'Description', 'Type (No2)',
+      'Inventory Type', 'Scan Type', 'Scanned At', 'Auditor',
     ];
 
-    const csvRows = [headers.join(',')];
+    // BOM for Excel UTF-8
+    const csvRows = ['﻿' + headers.join(',')];
 
-    for (const binRow of summaryData) {
-      // Get inventory for this bin
-      const inventoryRows = await prisma.inventory.findMany({
-        where: { locationCode: binRow.warehouse, binCode: binRow.bin },
-      });
+    const allBinKeys = new Set([...Object.keys(invByBin), ...Object.keys(scansByBin)]);
 
-      // Get sessions for date filter
-      const sessionDateFilter = {};
-      if (date_from) sessionDateFilter.gte = new Date(date_from);
-      if (date_to) { const e = new Date(date_to); e.setHours(23,59,59,999); sessionDateFilter.lte = e; }
-
-      const sessions = await prisma.auditSession.findMany({
-        where: {
-          warehouse: binRow.warehouse,
-          ...(Object.keys(sessionDateFilter).length > 0 ? { startTime: sessionDateFilter } : {}),
-        },
-        select: { id: true, startTime: true, auditorEmail: true },
-      });
-      const sessionIds = sessions.map(s => s.id);
-      const sessionMap = Object.fromEntries(sessions.map(s => [s.id, s]));
-
-      const scans = sessionIds.length > 0
-        ? await prisma.scannedDevice.findMany({
-            where: { sessionId: { in: sessionIds }, binCode: binRow.bin },
-          })
-        : [];
+    for (const binKey of allBinKeys) {
+      const [wh, bin] = binKey.split('::');
+      const inventoryRows = invByBin[binKey] || [];
+      const scans = scansByBin[binKey] || [];
 
       const matchedSerials = new Set(scans.filter(s => s.matched).map(s => (s.serialNo || '').toUpperCase()));
+      const matched = matchedSerials.size;
+      const variance = scans.filter(s => !s.matched).length;
+      const expected = inventoryRows.length;
 
-      // 1. Matched devices (scanned & found in inventory)
+      const latestSess = allSessions
+        .filter(s => s.warehouse === wh)
+        .sort((a, b) => new Date(b.startTime) - new Date(a.startTime))[0];
+
+      const binStatus = computeBinStatus(matched, expected, variance, !!latestSess?.endTime);
+
+      if (status && binStatus !== status) continue;
+
+      const auditDate = latestSess ? new Date(latestSess.startTime).toLocaleDateString('en-IN') : '';
+
+      // 1. Matched
       for (const scan of scans.filter(s => s.matched)) {
         const sess = sessionMap[scan.sessionId];
         const inv = inventoryRows.find(r => r.serialNo && r.serialNo.toUpperCase() === (scan.serialNo || '').toUpperCase());
         csvRows.push([
-          binRow.warehouse, binRow.bin,
-          sess ? new Date(sess.startTime).toLocaleDateString('en-IN') : '',
-          binRow.finalStatus,
-          'Matched ✓',
+          wh, bin, auditDate, binStatus, 'Matched',
           scan.serialNo || '', scan.macId || '', scan.deviceId || '',
-          `"${inv?.description || ''}"`, inv?.no2 || '', inv?.inventory || '',
+          `"${(inv?.description || '').replace(/"/g, '""')}"`,
+          inv?.no2 || '', inv?.inventory || '',
           scan.scanType || '', new Date(scan.scannedAt).toLocaleString('en-IN'),
           sess?.auditorEmail || '',
         ].join(','));
       }
 
-      // 2. Missing devices (in inventory but NOT scanned)
+      // 2. Missing
       for (const inv of inventoryRows) {
         if (!inv.serialNo || matchedSerials.has(inv.serialNo.toUpperCase())) continue;
         csvRows.push([
-          binRow.warehouse, binRow.bin, '', binRow.finalStatus,
-          'Missing ✗',
+          wh, bin, auditDate, binStatus, 'Missing',
           inv.serialNo || '', inv.macId || '', inv.deviceId || '',
-          `"${inv.description || ''}"`, inv.no2 || '', inv.inventory || '',
+          `"${(inv.description || '').replace(/"/g, '""')}"`,
+          inv.no2 || '', inv.inventory || '',
           '', '', '',
         ].join(','));
       }
 
-      // 3. Variance devices (scanned but NOT in inventory)
+      // 3. Variance
       for (const scan of scans.filter(s => !s.matched)) {
         const sess = sessionMap[scan.sessionId];
         csvRows.push([
-          binRow.warehouse, binRow.bin,
-          sess ? new Date(sess.startTime).toLocaleDateString('en-IN') : '',
-          binRow.finalStatus,
-          'Variance ⚠',
-          scan.extractedSerial || '', '', '',
-          '', '', '',
+          wh, bin, auditDate, binStatus, 'Variance',
+          scan.extractedSerial || '', '', '', '', '', '',
           scan.scanType || '', new Date(scan.scannedAt).toLocaleString('en-IN'),
           sess?.auditorEmail || '',
         ].join(','));
@@ -234,7 +260,7 @@ router.get('/export-detailed', requireAdmin, async (req, res) => {
     }
 
     const today = new Date().toISOString().slice(0, 10).replace(/-/g, '');
-    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', `attachment; filename="reconciliation_detailed_${today}.csv"`);
     res.send(csvRows.join('\n'));
   } catch (err) {
