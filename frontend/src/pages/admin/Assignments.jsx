@@ -221,13 +221,17 @@ export default function Assignments() {
                   <td className="px-4 py-3 text-gray-500">{a.assignedBy}</td>
                   <td className="px-4 py-3 text-gray-400 text-xs">{new Date(a.createdAt).toLocaleDateString('en-IN')}</td>
                   <td className="px-4 py-3">
-                    <button
-                      onClick={() => handleUnassign(a.id, a.binCode)}
-                      className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                      title="Unassign bin"
-                    >
-                      <Trash2 size={14} />
-                    </button>
+                    {status === 'Pending' ? (
+                      <button
+                        onClick={() => handleUnassign(a.id, a.binCode)}
+                        className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                        title="Unassign bin"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    ) : (
+                      <span className="text-xs text-gray-300 px-1.5" title="Cannot unassign — audit already started">—</span>
+                    )}
                   </td>
                 </tr>
               );
