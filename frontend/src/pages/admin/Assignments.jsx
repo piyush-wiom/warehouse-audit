@@ -3,8 +3,19 @@ import api from '../../lib/api';
 import toast from 'react-hot-toast';
 import { Plus, CheckSquare, Square, Users, Search, Trash2 } from 'lucide-react';
 
+const STATUS_BADGE = {
+  Complete: 'badge-complete',
+  Short: 'badge-short',
+  Excess: 'badge-excess',
+  Variance: 'badge-variance',
+  Pending: 'badge-pending',
+  Scanning: 'badge-scanning',
+  Corrected: 'badge-corrected',
+};
+
 export default function Assignments() {
   const [assignments, setAssignments] = useState([]);
+  const [statusMap, setStatusMap] = useState({});
   const [warehouses, setWarehouses] = useState([]);
   const [bins, setBins] = useState([]);
   const [auditors, setAuditors] = useState([]);
@@ -16,14 +27,22 @@ export default function Assignments() {
   const [userSearch, setUserSearch] = useState('');
 
   async function load() {
-    const [a, w, u] = await Promise.allSettled([
+    const [a, w, u, r] = await Promise.allSettled([
       api.get('/assignments'),
       api.get('/inventory/warehouses'),
       api.get('/users'),
+      api.get('/reconciliation'),
     ]);
     if (a.status === 'fulfilled') setAssignments(a.value.data);
     if (w.status === 'fulfilled') setWarehouses(w.value.data);
     if (u.status === 'fulfilled') setAuditors(u.value.data.filter(u => u.role === 'auditor' && u.isActive));
+    if (r.status === 'fulfilled') {
+      const map = {};
+      for (const row of r.value.data) {
+        map[`${row.warehouse}::${row.bin}`] = row.finalStatus;
+      }
+      setStatusMap(map);
+    }
   }
   useEffect(() => { load(); }, []);
 
@@ -46,11 +65,8 @@ export default function Assignments() {
 
   function toggleAll() {
     const unassigned = bins.filter(b => !b.isAssigned).map(b => b.binCode);
-    if (selectedBins.length === unassigned.length) {
-      setSelectedBins([]);
-    } else {
-      setSelectedBins(unassigned);
-    }
+    if (selectedBins.length === unassigned.length) setSelectedBins([]);
+    else setSelectedBins(unassigned);
   }
 
   async function handleUnassign(id, binCode) {
@@ -76,14 +92,12 @@ export default function Assignments() {
         assigned_to: selectedAuditor,
       });
       toast.success(data.message);
-      if (data.skipped?.length) {
-        toast(`Skipped already assigned: ${data.skipped.join(', ')}`, { icon: '⚠️' });
-      }
+      if (data.skipped?.length) toast(`Skipped already assigned: ${data.skipped.join(', ')}`, { icon: '⚠️' });
       setSelectedBins([]);
       setSelectedAuditor('');
       setShowForm(false);
       load();
-      handleWarehouseChange(selectedWarehouse); // refresh bins
+      handleWarehouseChange(selectedWarehouse);
     } catch (err) {
       toast.error(err.response?.data?.error || 'Failed');
     } finally {
@@ -139,9 +153,7 @@ export default function Assignments() {
                     key={bin.binCode}
                     onClick={() => !bin.isAssigned && toggleBin(bin.binCode)}
                     className={`flex items-center gap-3 px-4 py-2.5 border-b border-gray-100 last:border-0 ${
-                      bin.isAssigned
-                        ? 'bg-gray-50 cursor-not-allowed opacity-60'
-                        : 'hover:bg-blue-50 cursor-pointer'
+                      bin.isAssigned ? 'bg-gray-50 cursor-not-allowed opacity-60' : 'hover:bg-blue-50 cursor-pointer'
                     }`}
                   >
                     {bin.isAssigned ? (
@@ -190,32 +202,38 @@ export default function Assignments() {
         <table className="w-full text-sm">
           <thead className="bg-gray-50 border-b border-gray-200">
             <tr>
-              {['Warehouse', 'Bin', 'Assigned To', 'Assigned By', 'Date', ''].map(h => (
+              {['Warehouse', 'Bin', 'Status', 'Assigned To', 'Assigned By', 'Date', ''].map(h => (
                 <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">{h}</th>
               ))}
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100">
-            {filteredAssignments.map(a => (
-              <tr key={a.id} className="hover:bg-gray-50">
-                <td className="px-4 py-3 font-medium">{a.warehouse}</td>
-                <td className="px-4 py-3 font-mono text-sm">{a.binCode}</td>
-                <td className="px-4 py-3 text-gray-600">{a.assignedTo}</td>
-                <td className="px-4 py-3 text-gray-500">{a.assignedBy}</td>
-                <td className="px-4 py-3 text-gray-400 text-xs">{new Date(a.createdAt).toLocaleDateString('en-IN')}</td>
-                <td className="px-4 py-3">
-                  <button
-                    onClick={() => handleUnassign(a.id, a.binCode)}
-                    className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                    title="Unassign bin"
-                  >
-                    <Trash2 size={14} />
-                  </button>
-                </td>
-              </tr>
-            ))}
+            {filteredAssignments.map(a => {
+              const status = statusMap[`${a.warehouse}::${a.binCode}`] || 'Pending';
+              return (
+                <tr key={a.id} className="hover:bg-gray-50">
+                  <td className="px-4 py-3 font-medium">{a.warehouse}</td>
+                  <td className="px-4 py-3 font-mono text-sm">{a.binCode}</td>
+                  <td className="px-4 py-3">
+                    <span className={STATUS_BADGE[status] || 'badge-pending'}>{status}</span>
+                  </td>
+                  <td className="px-4 py-3 text-gray-600">{a.assignedTo}</td>
+                  <td className="px-4 py-3 text-gray-500">{a.assignedBy}</td>
+                  <td className="px-4 py-3 text-gray-400 text-xs">{new Date(a.createdAt).toLocaleDateString('en-IN')}</td>
+                  <td className="px-4 py-3">
+                    <button
+                      onClick={() => handleUnassign(a.id, a.binCode)}
+                      className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                      title="Unassign bin"
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </td>
+                </tr>
+              );
+            })}
             {filteredAssignments.length === 0 && (
-              <tr><td colSpan={6} className="px-4 py-8 text-center text-gray-400">
+              <tr><td colSpan={7} className="px-4 py-8 text-center text-gray-400">
                 {userSearch ? `No assignments matching "${userSearch}"` : 'No assignments yet'}
               </td></tr>
             )}
