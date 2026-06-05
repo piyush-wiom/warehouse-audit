@@ -61,11 +61,11 @@ function computeBinStats(inventoryRows, allScans, currentSessionScans) {
 }
 
 function computeBinStatus(stats, sessionEnded) {
-  if (!sessionEnded && stats.totalScanned === 0) return 'Pending';
-  if (!sessionEnded) return 'Scanning';
+  if (stats.totalScanned === 0) return 'Pending';
   if (stats.matched === stats.expected && stats.variance === 0) return 'Complete';
   if (stats.matched > stats.expected) return 'Excess';
   if (stats.variance > 0) return 'Variance';
+  if (!sessionEnded) return 'Scanning';
   return 'Short';
 }
 
