@@ -13,17 +13,17 @@ const STATUS_BADGE = {
 };
 
 const TABS = [
-  { id: 'new', label: 'New', desc: 'Not started' },
-  { id: 'inprogress', label: 'In Progress', desc: 'Scanning started' },
-  { id: 'completed', label: 'Completed', desc: 'All matched' },
-  { id: 'discrepancy', label: 'Discrepancy', desc: 'Mismatch found' },
+  { id: 'new',         label: 'New',         desc: 'Not started' },
+  { id: 'inprogress',  label: 'In Progress',  desc: 'Scanning started' },
+  { id: 'completed',   label: 'Completed',    desc: 'All matched' },
+  { id: 'discrepancy', label: 'Discrepancy',  desc: 'Mismatch found' },
 ];
 
 function binTab(status) {
-  if (status === 'Pending') return 'new';
+  if (status === 'Pending')  return 'new';
   if (status === 'Scanning') return 'inprogress';
   if (status === 'Complete') return 'completed';
-  return 'discrepancy'; // Short, Excess, Variance
+  return 'discrepancy'; // Short / Excess / Variance
 }
 
 function BinCard({ a, stats }) {
@@ -53,43 +53,22 @@ function BinCard({ a, stats }) {
 }
 
 export default function AuditorDashboard() {
-  const [assignments, setAssignments] = useState([]);
-  const [binStats, setBinStats] = useState({});
+  const [rows, setRows] = useState([]);   // each row = { ...assignment, stats }
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('new');
 
   useEffect(() => {
-    async function load() {
-      const { data } = await api.get('/assignments/my');
-      setAssignments(data);
-
-      const sessions = await api.get('/sessions/my');
-      const statsMap = {};
-      await Promise.allSettled(
-        data.map(async a => {
-          const latestSession = sessions.data.find(s => s.warehouse === a.warehouse);
-          if (!latestSession) {
-            statsMap[`${a.warehouse}::${a.binCode}`] = { status: 'Pending', matched: 0, expected: 0, variance: 0, remaining: 0 };
-            return;
-          }
-          const { data: stats } = await api.get(`/sessions/${latestSession.id}/bin-stats/${a.binCode}`);
-          statsMap[`${a.warehouse}::${a.binCode}`] = stats;
-        })
-      );
-      setBinStats(statsMap);
-      setLoading(false);
-    }
-    load();
+    api.get('/assignments/my-with-stats')
+      .then(r => setRows(r.data))
+      .finally(() => setLoading(false));
   }, []);
 
   if (loading) return <p className="text-gray-400">Loading your assignments…</p>;
 
   const tabGroups = { new: [], inprogress: [], completed: [], discrepancy: [] };
-  for (const a of assignments) {
-    const key = `${a.warehouse}::${a.binCode}`;
-    const stats = binStats[key];
-    const tab = binTab(stats?.status || 'Pending');
-    tabGroups[tab].push({ a, stats });
+  for (const row of rows) {
+    const tab = binTab(row.stats?.status || 'Pending');
+    tabGroups[tab].push(row);
   }
 
   const visibleBins = tabGroups[activeTab] || [];
@@ -98,7 +77,7 @@ export default function AuditorDashboard() {
     <div>
       <h2 className="text-xl font-bold text-gray-900 mb-4">My Assigned Bins</h2>
 
-      {assignments.length === 0 ? (
+      {rows.length === 0 ? (
         <div className="card text-center py-12">
           <ScanLine size={48} className="mx-auto text-gray-300 mb-3" />
           <p className="text-gray-500">No bins assigned to you yet.</p>
@@ -138,8 +117,8 @@ export default function AuditorDashboard() {
             </div>
           ) : (
             <div className="space-y-3">
-              {visibleBins.map(({ a, stats }) => (
-                <BinCard key={a.id} a={a} stats={stats} />
+              {visibleBins.map(row => (
+                <BinCard key={row.id} a={row} stats={row.stats} />
               ))}
             </div>
           )}

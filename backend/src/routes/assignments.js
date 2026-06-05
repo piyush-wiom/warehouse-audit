@@ -73,4 +73,103 @@ router.get('/my', requireAuth, async (req, res) => {
   res.json(assignments);
 });
 
+// GET /api/assignments/my-with-stats — assignments + bin status using same logic as reconciliation
+router.get('/my-with-stats', requireAuth, async (req, res) => {
+  try {
+    const assignments = await prisma.assignment.findMany({
+      where: { assignedTo: req.user.email },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (assignments.length === 0) return res.json([]);
+
+    const warehouses = [...new Set(assignments.map(a => a.warehouse))];
+    const binCodes  = [...new Set(assignments.map(a => a.binCode))];
+
+    // Bulk fetch in parallel
+    const [allSessions, inventoryGroups] = await Promise.all([
+      prisma.auditSession.findMany({
+        where: { warehouse: { in: warehouses } },
+        orderBy: { startTime: 'desc' },
+      }),
+      prisma.inventory.groupBy({
+        by: ['locationCode', 'binCode'],
+        where: { locationCode: { in: warehouses }, binCode: { in: binCodes } },
+        _count: { id: true },
+      }),
+    ]);
+
+    const sessionIds = allSessions.map(s => s.id);
+    const allScans = sessionIds.length > 0
+      ? await prisma.scannedDevice.findMany({ where: { sessionId: { in: sessionIds } } })
+      : [];
+
+    // Index sessions by warehouse
+    const sessionsByWH = {};
+    for (const s of allSessions) {
+      if (!sessionsByWH[s.warehouse]) sessionsByWH[s.warehouse] = [];
+      sessionsByWH[s.warehouse].push(s);
+    }
+
+    // Index scans by sessionId::binCode
+    const scansBySessionBin = {};
+    for (const scan of allScans) {
+      const key = `${scan.sessionId}::${scan.binCode}`;
+      if (!scansBySessionBin[key]) scansBySessionBin[key] = [];
+      scansBySessionBin[key].push(scan);
+    }
+
+    // Index expected counts
+    const expectedMap = {};
+    for (const g of inventoryGroups) {
+      expectedMap[`${g.locationCode}::${g.binCode}`] = g._count.id;
+    }
+
+    const result = assignments.map(a => {
+      const whSessions = sessionsByWH[a.warehouse] || [];
+      // Latest session overall — used to determine if warehouse session ended
+      const latestSessionOverall = whSessions[0] || null;
+
+      // All scans for this bin across all sessions
+      const allBinScans = whSessions.flatMap(s => scansBySessionBin[`${s.id}::${a.binCode}`] || []);
+
+      // Matched = cross-session deduped
+      const matchedSerials = new Set(
+        allBinScans.filter(s => s.matched && s.serialNo).map(s => s.serialNo.toUpperCase())
+      );
+      const matched = matchedSerials.size;
+
+      // Latest session that ACTUALLY has scans for this bin
+      const latestSessionForBin = whSessions.find(s =>
+        (scansBySessionBin[`${s.id}::${a.binCode}`] || []).length > 0
+      ) || null;
+
+      // Variance = only from that session (same as reconciliation)
+      const latestBinScans = latestSessionForBin
+        ? (scansBySessionBin[`${latestSessionForBin.id}::${a.binCode}`] || [])
+        : [];
+      const variance = latestBinScans.filter(s => !s.matched).length;
+
+      const expected  = expectedMap[`${a.warehouse}::${a.binCode}`] || 0;
+      const remaining = Math.max(0, expected - matched);
+      const sessionEnded = latestSessionOverall ? !!latestSessionOverall.endTime : false;
+
+      // Identical logic to reconciliation computeBinStatus
+      let status;
+      if (matched === 0 && variance === 0)              status = 'Pending';
+      else if (matched === expected && variance === 0)  status = 'Complete';
+      else if (matched > expected)                      status = 'Excess';
+      else if (variance > 0)                            status = 'Variance';
+      else if (!sessionEnded)                           status = 'Scanning';
+      else                                              status = 'Short';
+
+      return { ...a, stats: { expected, matched, variance, remaining, status, sessionEnded } };
+    });
+
+    res.json(result);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 module.exports = router;
