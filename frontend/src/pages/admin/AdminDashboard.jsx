@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import api from '../../lib/api';
-import { Users, Package, ClipboardList, Activity, Calendar, TrendingUp, AlertTriangle, ScanLine } from 'lucide-react';
+import { Users, Package, ClipboardList, Activity, Calendar, TrendingUp, AlertTriangle, ScanLine, ShieldCheck, ShieldAlert } from 'lucide-react';
 
 function StatCard({ icon: Icon, label, value, color }) {
   return (
@@ -24,6 +24,8 @@ export default function AdminDashboard() {
   const [dateRange, setDateRange] = useState({ from: sevenDaysAgo, to: today });
   const [dailyStats, setDailyStats] = useState([]);
   const [dailyLoading, setDailyLoading] = useState(false);
+  const [auditorStats, setAuditorStats] = useState([]);
+  const [auditorLoading, setAuditorLoading] = useState(false);
 
   useEffect(() => {
     async function load() {
@@ -70,6 +72,18 @@ export default function AdminDashboard() {
     }
     loadDaily();
   }, [dateRange]);
+
+  useEffect(() => {
+    async function loadAuditorStats() {
+      setAuditorLoading(true);
+      try {
+        const { data } = await api.get('/reconciliation/auditor-stats');
+        setAuditorStats(data);
+      } catch { }
+      setAuditorLoading(false);
+    }
+    loadAuditorStats();
+  }, []);
 
   const totalAuditsInRange = dailyStats.reduce((s, d) => s + d.totalAudits, 0);
   const avgCompletion = dailyStats.length > 0
@@ -179,6 +193,51 @@ export default function AdminDashboard() {
             <p className="text-xs text-gray-500">Avg Discrepancy Rate</p>
             <p className="text-xl font-bold text-gray-900">{avgDiscrepancy}%</p>
           </div>
+        </div>
+      </div>
+
+      {/* Auditor Performance */}
+      <div className="mb-4 mt-8">
+        <h3 className="font-semibold text-gray-900 mb-3">Auditor Performance</h3>
+        <div className="card overflow-x-auto p-0">
+          <table className="w-full text-sm">
+            <thead className="bg-gray-50 border-b border-gray-200">
+              <tr>
+                {['Auditor', 'Assigned', 'Completed', 'Discrepancy', 'Scanning', 'Pending', 'Accuracy'].map(h => (
+                  <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {auditorLoading ? (
+                <tr><td colSpan={7} className="px-4 py-6 text-center text-gray-400">Loading…</td></tr>
+              ) : auditorStats.length === 0 ? (
+                <tr><td colSpan={7} className="px-4 py-6 text-center text-gray-400">No assignment data yet</td></tr>
+              ) : auditorStats.map(a => (
+                <tr key={a.email} className="hover:bg-gray-50">
+                  <td className="px-4 py-3 text-gray-700 font-medium">{a.email}</td>
+                  <td className="px-4 py-3 text-center font-semibold">{a.assigned}</td>
+                  <td className="px-4 py-3 text-center text-green-700 font-semibold">{a.completed}</td>
+                  <td className="px-4 py-3 text-center text-red-600 font-semibold">{a.discrepancy}</td>
+                  <td className="px-4 py-3 text-center text-blue-600">{a.scanning}</td>
+                  <td className="px-4 py-3 text-center text-gray-400">{a.pending}</td>
+                  <td className="px-4 py-3">
+                    <div className="flex items-center gap-2">
+                      <div className="flex-1 h-2 bg-gray-100 rounded-full overflow-hidden">
+                        <div
+                          className={`h-full rounded-full transition-all ${a.accuracyRate >= 80 ? 'bg-green-500' : a.accuracyRate >= 50 ? 'bg-yellow-500' : 'bg-red-500'}`}
+                          style={{ width: `${a.accuracyRate}%` }}
+                        />
+                      </div>
+                      <span className={`text-xs font-bold w-10 text-right ${a.accuracyRate >= 80 ? 'text-green-700' : a.accuracyRate >= 50 ? 'text-yellow-700' : 'text-red-700'}`}>
+                        {a.accuracyRate}%
+                      </span>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       </div>
 

@@ -397,6 +397,96 @@ router.get('/daily-stats', requireAdmin, async (req, res) => {
   }
 });
 
+// GET /api/reconciliation/auditor-stats — per-auditor performance metrics
+router.get('/auditor-stats', requireAdmin, async (req, res) => {
+  try {
+    const { warehouse, date_from, date_to } = req.query;
+
+    const [assignments, reconData] = await Promise.all([
+      prisma.assignment.findMany({ where: warehouse ? { warehouse } : {} }),
+      buildReconciliation(warehouse, null, date_from, date_to),
+    ]);
+
+    // Map bin status by warehouse::binCode
+    const statusMap = {};
+    for (const r of reconData) {
+      statusMap[`${r.warehouse}::${r.bin}`] = r;
+    }
+
+    // Aggregate per auditor
+    const auditorMap = {};
+    for (const a of assignments) {
+      const email = a.assignedTo;
+      if (!auditorMap[email]) {
+        auditorMap[email] = { email, assigned: 0, completed: 0, discrepancy: 0, scanning: 0, pending: 0 };
+      }
+      auditorMap[email].assigned++;
+      const rec = statusMap[`${a.warehouse}::${a.binCode}`];
+      if (!rec || rec.finalStatus === 'Pending') auditorMap[email].pending++;
+      else if (rec.finalStatus === 'Scanning') auditorMap[email].scanning++;
+      else if (rec.finalStatus === 'Complete' || rec.finalStatus === 'Corrected') auditorMap[email].completed++;
+      else auditorMap[email].discrepancy++; // Short / Excess / Variance
+    }
+
+    const result = Object.values(auditorMap)
+      .map(a => ({
+        ...a,
+        accuracyRate: a.assigned > 0 ? Math.round((a.completed / a.assigned) * 100) : 0,
+      }))
+      .sort((a, b) => b.assigned - a.assigned);
+
+    res.json(result);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/reconciliation/bin-detail/:warehouse/:binCode — full drill-down for one bin
+router.get('/bin-detail/:warehouse/:binCode', requireAdmin, async (req, res) => {
+  try {
+    const { warehouse, binCode } = req.params;
+
+    const [inventory, sessions] = await Promise.all([
+      prisma.inventory.findMany({ where: { locationCode: warehouse, binCode }, orderBy: { serialNo: 'asc' } }),
+      prisma.auditSession.findMany({ where: { warehouse }, orderBy: { startTime: 'desc' } }),
+    ]);
+
+    const sessionIds = sessions.map(s => s.id);
+    const sessionMap = Object.fromEntries(sessions.map(s => [s.id, s]));
+
+    const allScans = sessionIds.length > 0
+      ? await prisma.scannedDevice.findMany({ where: { sessionId: { in: sessionIds }, binCode }, orderBy: { scannedAt: 'desc' } })
+      : [];
+
+    // Deduped matched scans (first scan wins per serial)
+    const matchedSerialSet = new Set();
+    const matched = [];
+    for (const scan of allScans.filter(s => s.matched)) {
+      const key = (scan.serialNo || '').toUpperCase();
+      if (key && !matchedSerialSet.has(key)) {
+        matchedSerialSet.add(key);
+        matched.push({ ...scan, auditorEmail: sessionMap[scan.sessionId]?.auditorEmail });
+      }
+    }
+
+    // Missing: in inventory but serial never matched
+    const missing = inventory.filter(inv =>
+      !inv.serialNo || !matchedSerialSet.has(inv.serialNo.toUpperCase())
+    );
+
+    // Variance: scanned but didn't match inventory
+    const variance = allScans
+      .filter(s => !s.matched)
+      .map(s => ({ ...s, auditorEmail: sessionMap[s.sessionId]?.auditorEmail }));
+
+    res.json({ warehouse, binCode, expected: inventory.length, matched, missing, variance });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/reconciliation/sessions-history — all audit sessions with date filter
 router.get('/sessions-history', requireAdmin, async (req, res) => {
   try {
