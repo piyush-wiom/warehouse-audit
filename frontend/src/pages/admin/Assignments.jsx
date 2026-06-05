@@ -1,29 +1,27 @@
 import { useEffect, useState } from 'react';
 import api from '../../lib/api';
 import toast from 'react-hot-toast';
-import { Plus, CheckSquare, Square, Users, Search, Trash2 } from 'lucide-react';
+import { Plus, CheckSquare, Square, Users, Search, Trash2, UserPlus, X } from 'lucide-react';
 
 const STATUS_BADGE = {
-  Complete: 'badge-complete',
-  Short: 'badge-short',
-  Excess: 'badge-excess',
-  Variance: 'badge-variance',
-  Pending: 'badge-pending',
-  Scanning: 'badge-scanning',
+  Complete: 'badge-complete', Short: 'badge-short', Excess: 'badge-excess',
+  Variance: 'badge-variance', Pending: 'badge-pending', Scanning: 'badge-scanning',
   Corrected: 'badge-corrected',
 };
+
+let _nextGroupId = 1;
+function newGroup() { return { id: _nextGroupId++, auditor: '', bins: [] }; }
 
 export default function Assignments() {
   const [assignments, setAssignments] = useState([]);
   const [statusMap, setStatusMap] = useState({});
   const [warehouses, setWarehouses] = useState([]);
-  const [bins, setBins] = useState([]);
+  const [bins, setBins] = useState([]);           // all bins for selected warehouse
   const [auditors, setAuditors] = useState([]);
   const [selectedWarehouse, setSelectedWarehouse] = useState('');
-  const [selectedAuditor, setSelectedAuditor] = useState('');
-  const [selectedBins, setSelectedBins] = useState([]);
+  const [groups, setGroups] = useState([newGroup()]); // multi-auditor groups
   const [showForm, setShowForm] = useState(false);
-  const [loading, setLoading] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
   const [userSearch, setUserSearch] = useState('');
 
   async function load() {
@@ -38,9 +36,7 @@ export default function Assignments() {
     if (u.status === 'fulfilled') setAuditors(u.value.data.filter(u => u.role === 'auditor' && u.isActive));
     if (r.status === 'fulfilled') {
       const map = {};
-      for (const row of r.value.data) {
-        map[`${row.warehouse}::${row.bin}`] = row.finalStatus;
-      }
+      for (const row of r.value.data) map[`${row.warehouse}::${row.bin}`] = row.finalStatus;
       setStatusMap(map);
     }
   }
@@ -48,7 +44,7 @@ export default function Assignments() {
 
   async function handleWarehouseChange(warehouse) {
     setSelectedWarehouse(warehouse);
-    setSelectedBins([]);
+    setGroups([newGroup()]);
     if (warehouse) {
       const { data } = await api.get(`/inventory/bins/${warehouse}`);
       setBins(data);
@@ -57,16 +53,74 @@ export default function Assignments() {
     }
   }
 
-  function toggleBin(binCode) {
-    setSelectedBins(prev =>
-      prev.includes(binCode) ? prev.filter(b => b !== binCode) : [...prev, binCode]
-    );
+  // Bins already picked by OTHER groups (can't double-assign)
+  function takenByOthers(groupId) {
+    return new Set(groups.filter(g => g.id !== groupId).flatMap(g => g.bins));
   }
 
-  function toggleAll() {
-    const unassigned = bins.filter(b => !b.isAssigned).map(b => b.binCode);
-    if (selectedBins.length === unassigned.length) setSelectedBins([]);
-    else setSelectedBins(unassigned);
+  function availableBins(groupId) {
+    const taken = takenByOthers(groupId);
+    return bins.filter(b => !b.isAssigned && !taken.has(b.binCode));
+  }
+
+  function toggleBin(groupId, binCode) {
+    setGroups(prev => prev.map(g => {
+      if (g.id !== groupId) return g;
+      const bins = g.bins.includes(binCode)
+        ? g.bins.filter(b => b !== binCode)
+        : [...g.bins, binCode];
+      return { ...g, bins };
+    }));
+  }
+
+  function toggleAllForGroup(groupId) {
+    const avail = availableBins(groupId).map(b => b.binCode);
+    setGroups(prev => prev.map(g => {
+      if (g.id !== groupId) return g;
+      const allSelected = avail.length > 0 && avail.every(b => g.bins.includes(b));
+      return { ...g, bins: allSelected ? [] : avail };
+    }));
+  }
+
+  function addGroup() { setGroups(prev => [...prev, newGroup()]); }
+
+  function removeGroup(id) {
+    if (groups.length === 1) return; // keep at least one
+    setGroups(prev => prev.filter(g => g.id !== id));
+  }
+
+  function updateAuditor(groupId, auditor) {
+    setGroups(prev => prev.map(g => g.id === groupId ? { ...g, auditor } : g));
+  }
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    const validGroups = groups.filter(g => g.auditor && g.bins.length > 0);
+    if (validGroups.length === 0) return toast.error('Add at least one auditor with bins selected');
+    setSubmitting(true);
+    let totalAssigned = 0, totalSkipped = 0;
+    try {
+      await Promise.all(validGroups.map(async g => {
+        const { data } = await api.post('/assignments', {
+          warehouse: selectedWarehouse,
+          bin_codes: g.bins,
+          assigned_to: g.auditor,
+        });
+        totalAssigned += data.assigned?.length || 0;
+        totalSkipped  += data.skipped?.length  || 0;
+      }));
+      toast.success(`Assigned ${totalAssigned} bin(s) across ${validGroups.length} auditor(s)`);
+      if (totalSkipped > 0) toast(`Skipped ${totalSkipped} already-assigned bin(s)`, { icon: '⚠️' });
+      setGroups([newGroup()]);
+      setSelectedWarehouse('');
+      setBins([]);
+      setShowForm(false);
+      load();
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Assignment failed');
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   async function handleUnassign(id, binCode) {
@@ -80,124 +134,123 @@ export default function Assignments() {
     }
   }
 
-  async function handleAssign(e) {
-    e.preventDefault();
-    if (selectedBins.length === 0) return toast.error('Select at least one bin');
-    if (!selectedAuditor) return toast.error('Select an auditor');
-    setLoading(true);
-    try {
-      const { data } = await api.post('/assignments', {
-        warehouse: selectedWarehouse,
-        bin_codes: selectedBins,
-        assigned_to: selectedAuditor,
-      });
-      toast.success(data.message);
-      if (data.skipped?.length) toast(`Skipped already assigned: ${data.skipped.join(', ')}`, { icon: '⚠️' });
-      setSelectedBins([]);
-      setSelectedAuditor('');
-      setShowForm(false);
-      load();
-      handleWarehouseChange(selectedWarehouse);
-    } catch (err) {
-      toast.error(err.response?.data?.error || 'Failed');
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  const unassignedBins = bins.filter(b => !b.isAssigned);
-  const allSelected = unassignedBins.length > 0 && selectedBins.length === unassignedBins.length;
   const filteredAssignments = assignments.filter(a =>
     !userSearch || a.assignedTo.toLowerCase().includes(userSearch.toLowerCase())
   );
+
+  const totalBinsInForm = groups.reduce((s, g) => s + g.bins.length, 0);
 
   return (
     <div>
       <div className="flex items-center justify-between mb-6">
         <h2 className="text-xl font-bold text-gray-900">Bin Assignments</h2>
-        <button onClick={() => setShowForm(v => !v)} className="btn-primary">
+        <button onClick={() => { setShowForm(v => !v); setGroups([newGroup()]); setSelectedWarehouse(''); setBins([]); }} className="btn-primary">
           <Plus size={16} /> Assign Bins
         </button>
       </div>
 
       {showForm && (
-        <form onSubmit={handleAssign} className="card mb-6 space-y-4">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div>
-              <label className="label">Warehouse</label>
-              <select className="input" value={selectedWarehouse} onChange={e => handleWarehouseChange(e.target.value)} required>
-                <option value="">Select warehouse…</option>
-                {warehouses.map(w => <option key={w} value={w}>{w}</option>)}
-              </select>
-            </div>
-            <div>
-              <label className="label">Assign to Auditor</label>
-              <select className="input" value={selectedAuditor} onChange={e => setSelectedAuditor(e.target.value)} required>
-                <option value="">Select auditor…</option>
-                {auditors.map(a => <option key={a.id} value={a.email}>{a.name} ({a.email})</option>)}
-              </select>
-            </div>
+        <form onSubmit={handleSubmit} className="card mb-6 space-y-5">
+          {/* Warehouse */}
+          <div>
+            <label className="label">Warehouse</label>
+            <select className="input max-w-xs" value={selectedWarehouse} onChange={e => handleWarehouseChange(e.target.value)} required>
+              <option value="">Select warehouse…</option>
+              {warehouses.map(w => <option key={w} value={w}>{w}</option>)}
+            </select>
           </div>
 
           {selectedWarehouse && bins.length > 0 && (
-            <div>
-              <div className="flex items-center justify-between mb-2">
-                <label className="label mb-0">Select Bins ({selectedBins.length} selected)</label>
-                <button type="button" onClick={toggleAll} className="text-sm text-blue-600 hover:underline">
-                  {allSelected ? 'Deselect All' : `Select All Unassigned (${unassignedBins.length})`}
-                </button>
-              </div>
-              <div className="border border-gray-200 rounded-lg max-h-64 overflow-y-auto">
-                {bins.map(bin => (
-                  <div
-                    key={bin.binCode}
-                    onClick={() => !bin.isAssigned && toggleBin(bin.binCode)}
-                    className={`flex items-center gap-3 px-4 py-2.5 border-b border-gray-100 last:border-0 ${
-                      bin.isAssigned ? 'bg-gray-50 cursor-not-allowed opacity-60' : 'hover:bg-blue-50 cursor-pointer'
-                    }`}
-                  >
-                    {bin.isAssigned ? (
-                      <CheckSquare size={18} className="text-gray-400 shrink-0" />
-                    ) : selectedBins.includes(bin.binCode) ? (
-                      <CheckSquare size={18} className="text-blue-600 shrink-0" />
-                    ) : (
-                      <Square size={18} className="text-gray-400 shrink-0" />
-                    )}
-                    <span className="font-mono text-sm font-medium">{bin.binCode}</span>
-                    <span className="text-xs text-gray-500">{bin.inventory}</span>
-                    {bin.isAssigned && (
-                      <span className="ml-auto text-xs text-gray-400 flex items-center gap-1">
-                        <Users size={12} /> {bin.assignedTo}
-                      </span>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
+            <>
+              {/* Auditor groups */}
+              <div className="space-y-4">
+                {groups.map((group, idx) => {
+                  const avail = availableBins(group.id);
+                  const allSelected = avail.length > 0 && avail.every(b => group.bins.includes(b));
+                  return (
+                    <div key={group.id} className="border border-gray-200 rounded-xl p-4 bg-gray-50">
+                      <div className="flex items-center gap-3 mb-3">
+                        <span className="text-sm font-semibold text-gray-600 shrink-0">Auditor {idx + 1}</span>
+                        <select
+                          className="input flex-1 max-w-xs"
+                          value={group.auditor}
+                          onChange={e => updateAuditor(group.id, e.target.value)}
+                          required={group.bins.length > 0}
+                        >
+                          <option value="">Select auditor…</option>
+                          {auditors.map(a => <option key={a.id} value={a.email}>{a.name} ({a.email})</option>)}
+                        </select>
+                        <span className="text-xs text-gray-500 shrink-0">{group.bins.length} bin(s) selected</span>
+                        {groups.length > 1 && (
+                          <button type="button" onClick={() => removeGroup(group.id)}
+                            className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors shrink-0">
+                            <X size={15} />
+                          </button>
+                        )}
+                      </div>
 
-          <div className="flex gap-3">
-            <button type="submit" className="btn-primary" disabled={loading || selectedBins.length === 0}>
-              {loading ? 'Assigning…' : `Assign ${selectedBins.length > 0 ? `(${selectedBins.length} bins)` : ''}`}
-            </button>
-            <button type="button" onClick={() => setShowForm(false)} className="btn-secondary">Cancel</button>
-          </div>
+                      {/* Bin picker */}
+                      <div>
+                        <div className="flex items-center justify-between mb-1.5">
+                          <span className="text-xs text-gray-500">{avail.length} unassigned bin(s) available</span>
+                          <button type="button" onClick={() => toggleAllForGroup(group.id)}
+                            className="text-xs text-blue-600 hover:underline">
+                            {allSelected ? 'Deselect All' : 'Select All'}
+                          </button>
+                        </div>
+                        <div className="border border-gray-200 bg-white rounded-lg max-h-48 overflow-y-auto">
+                          {avail.length === 0 ? (
+                            <p className="text-xs text-gray-400 px-4 py-3 text-center">No unassigned bins remaining</p>
+                          ) : (
+                            avail.map(bin => (
+                              <div
+                                key={bin.binCode}
+                                onClick={() => toggleBin(group.id, bin.binCode)}
+                                className="flex items-center gap-3 px-4 py-2 border-b border-gray-100 last:border-0 hover:bg-blue-50 cursor-pointer"
+                              >
+                                {group.bins.includes(bin.binCode)
+                                  ? <CheckSquare size={16} className="text-blue-600 shrink-0" />
+                                  : <Square size={16} className="text-gray-400 shrink-0" />
+                                }
+                                <span className="font-mono text-sm font-medium">{bin.binCode}</span>
+                                {bin.inventory && <span className="text-xs text-gray-400">{bin.inventory}</span>}
+                              </div>
+                            ))
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Add another auditor */}
+              <button type="button" onClick={addGroup}
+                className="flex items-center gap-2 text-sm text-blue-600 hover:underline font-medium">
+                <UserPlus size={15} /> Add another auditor
+              </button>
+
+              {/* Submit */}
+              <div className="flex gap-3 pt-2 border-t border-gray-100">
+                <button type="submit" className="btn-primary" disabled={submitting || totalBinsInForm === 0}>
+                  {submitting ? 'Assigning…' : `Assign ${totalBinsInForm > 0 ? `(${totalBinsInForm} bins, ${groups.filter(g => g.auditor && g.bins.length).length} auditors)` : ''}`}
+                </button>
+                <button type="button" onClick={() => setShowForm(false)} className="btn-secondary">Cancel</button>
+              </div>
+            </>
+          )}
         </form>
       )}
 
+      {/* Filter */}
       <div className="flex items-center gap-2 mb-3">
         <Search size={16} className="text-gray-400 shrink-0" />
-        <input
-          className="input flex-1 max-w-xs"
-          placeholder="Filter by username or email…"
-          value={userSearch}
-          onChange={e => setUserSearch(e.target.value)}
-        />
-        {userSearch && (
-          <span className="text-xs text-gray-400">{filteredAssignments.length} of {assignments.length}</span>
-        )}
+        <input className="input flex-1 max-w-xs" placeholder="Filter by username or email…"
+          value={userSearch} onChange={e => setUserSearch(e.target.value)} />
+        {userSearch && <span className="text-xs text-gray-400">{filteredAssignments.length} of {assignments.length}</span>}
       </div>
 
+      {/* Table */}
       <div className="card overflow-x-auto p-0">
         <table className="w-full text-sm">
           <thead className="bg-gray-50 border-b border-gray-200">
@@ -214,19 +267,14 @@ export default function Assignments() {
                 <tr key={a.id} className="hover:bg-gray-50">
                   <td className="px-4 py-3 font-medium">{a.warehouse}</td>
                   <td className="px-4 py-3 font-mono text-sm">{a.binCode}</td>
-                  <td className="px-4 py-3">
-                    <span className={STATUS_BADGE[status] || 'badge-pending'}>{status}</span>
-                  </td>
+                  <td className="px-4 py-3"><span className={STATUS_BADGE[status] || 'badge-pending'}>{status}</span></td>
                   <td className="px-4 py-3 text-gray-600">{a.assignedTo}</td>
                   <td className="px-4 py-3 text-gray-500">{a.assignedBy}</td>
                   <td className="px-4 py-3 text-gray-400 text-xs">{new Date(a.createdAt).toLocaleDateString('en-IN')}</td>
                   <td className="px-4 py-3">
                     {status === 'Pending' ? (
-                      <button
-                        onClick={() => handleUnassign(a.id, a.binCode)}
-                        className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                        title="Unassign bin"
-                      >
+                      <button onClick={() => handleUnassign(a.id, a.binCode)}
+                        className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors" title="Unassign bin">
                         <Trash2 size={14} />
                       </button>
                     ) : (
