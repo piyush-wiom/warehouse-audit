@@ -42,6 +42,7 @@ model Inventory {
   serialNo     String?         @map("serial_no")
   macId        String?         @map("mac_id")
   deviceId     String?         @map("device_id")
+  lpnBoxId     String?         @map("lpn_box_id")
   createdAt    DateTime        @default(now()) @map("created_at")
 
   @@map("inventory")

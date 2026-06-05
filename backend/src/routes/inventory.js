@@ -10,12 +10,14 @@ const { requireAdmin, requireAuth } = require('../middleware/auth');
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
 
 const REQUIRED_COLUMNS = ['LocationCode', 'ItemNo', 'No2', 'Description', 'Inventory', 'BinCode', 'ZoneCode', 'SerialNo', 'MacId', 'DeviceId'];
+const OPTIONAL_COLUMNS = ['LpnBoxId'];
+const ALL_COLUMNS = [...REQUIRED_COLUMNS, ...OPTIONAL_COLUMNS];
 
 function normalizeRow(row) {
   // Normalize column names — case-insensitive key matching
   const out = {};
   for (const key of Object.keys(row)) {
-    const match = REQUIRED_COLUMNS.find(c => c.toLowerCase() === key.toLowerCase());
+    const match = ALL_COLUMNS.find(c => c.toLowerCase() === key.toLowerCase());
     if (match) out[match] = String(row[key] || '').trim();
   }
   return out;
@@ -95,6 +97,7 @@ router.post('/upload', requireAdmin, upload.single('file'), async (req, res) => 
         serialNo: row.SerialNo || null,
         macId: row.MacId || null,
         deviceId: row.DeviceId || null,
+        lpnBoxId: row.LpnBoxId || null,
       });
     }
 
@@ -162,7 +165,7 @@ router.get('/warehouses', requireAuth, async (req, res) => {
 router.get('/bins/:warehouse', requireAuth, async (req, res) => {
   const rows = await prisma.inventory.findMany({
     where: { locationCode: req.params.warehouse },
-    select: { binCode: true, zoneCode: true, inventory: true },
+    select: { binCode: true, zoneCode: true, inventory: true, lpnBoxId: true },
     distinct: ['binCode'],
     orderBy: { binCode: 'asc' },
   });
@@ -212,6 +215,24 @@ router.get('/upload-info', requireAdmin, async (req, res) => {
   if (!upload) return res.json(null);
   const count = await prisma.inventory.count();
   res.json({ ...upload, totalDevices: count });
+});
+
+// DELETE /api/inventory/reset-all — wipe ALL audit data (admin only)
+router.delete('/reset-all', requireAdmin, async (req, res) => {
+  try {
+    // Delete in FK-safe order
+    await prisma.scannedDevice.deleteMany({});
+    await prisma.auditSession.deleteMany({});
+    await prisma.correction.deleteMany({});
+    await prisma.reauditAssignment.deleteMany({});
+    await prisma.assignment.deleteMany({});
+    await prisma.inventory.deleteMany({});
+    await prisma.inventoryUpload.deleteMany({});
+    res.json({ message: 'All audit data cleared. Upload new inventory to start fresh.' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // GET /api/inventory/devices-view — paginated device viewer for admin

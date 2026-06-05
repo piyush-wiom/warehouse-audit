@@ -1,12 +1,12 @@
 import { useState, useRef } from 'react';
 import api from '../../lib/api';
 import toast from 'react-hot-toast';
-import { Upload, FileText, AlertTriangle, CheckCircle, Download } from 'lucide-react';
+import { Upload, FileText, AlertTriangle, CheckCircle, Download, Trash2 } from 'lucide-react';
 
-const SAMPLE_CSV = `LocationCode,ItemNo,No2,Description,Inventory,BinCode,ZoneCode,SerialNo,MacId,DeviceId
-WH-DELHI,ITEM001,ONT,Optical Network Terminal,Good Inventory,BIN-A01,ZONE-01,SY104766,AA:BB:CC:DD:EE:01,DEV001
-WH-DELHI,ITEM002,Router,WiFi Router,Good Inventory,BIN-A01,ZONE-01,SY104767,AA:BB:CC:DD:EE:02,DEV002
-WH-DELHI,ITEM003,ONT,Optical Network Terminal,Bad Inventory,BIN-B01,ZONE-02,SY104768,AA:BB:CC:DD:EE:03,DEV003
+const SAMPLE_CSV = `LocationCode,ItemNo,No2,Description,Inventory,BinCode,ZoneCode,SerialNo,MacId,DeviceId,LpnBoxId
+WH-DELHI,ITEM001,ONT,Optical Network Terminal,Good Inventory,BIN-A01,ZONE-01,SY104766,AA:BB:CC:DD:EE:01,DEV001,LPN-001
+WH-DELHI,ITEM002,Router,WiFi Router,Good Inventory,BIN-A01,ZONE-01,SY104767,AA:BB:CC:DD:EE:02,DEV002,LPN-001
+WH-DELHI,ITEM003,ONT,Optical Network Terminal,Bad Inventory,BIN-B01,ZONE-02,SY104768,AA:BB:CC:DD:EE:03,DEV003,LPN-002
 `;
 
 function downloadSampleCSV() {
@@ -22,6 +22,7 @@ function downloadSampleCSV() {
 export default function Inventory() {
   const [uploading, setUploading] = useState(false);
   const [result, setResult] = useState(null);
+  const [resetting, setResetting] = useState(false);
   const fileRef = useRef();
 
   async function handleUpload(e) {
@@ -40,6 +41,7 @@ export default function Inventory() {
       });
       setResult({ type: 'success', ...data });
       toast.success(data.message);
+      if (data.cleanup) toast(data.cleanup, { icon: '🧹', duration: 5000 });
       fileRef.current.value = '';
     } catch (err) {
       const msg = err.response?.data?.error || 'Upload failed';
@@ -50,23 +52,53 @@ export default function Inventory() {
     }
   }
 
+  async function handleResetAll() {
+    if (!confirm('⚠️ This will permanently delete ALL audit data — inventory, sessions, scans, assignments, corrections. Are you sure?')) return;
+    if (!confirm('Final confirmation: Delete everything and start fresh?')) return;
+    setResetting(true);
+    try {
+      await api.delete('/inventory/reset-all');
+      toast.success('All data cleared. Upload new inventory to begin.', { duration: 6000 });
+      setResult(null);
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Reset failed');
+    } finally {
+      setResetting(false);
+    }
+  }
+
   return (
     <div className="max-w-2xl">
-      <h2 className="text-xl font-bold text-gray-900 mb-6">Inventory Upload</h2>
+      <div className="flex items-center justify-between mb-6">
+        <h2 className="text-xl font-bold text-gray-900">Inventory Upload</h2>
+        <button
+          onClick={handleResetAll}
+          disabled={resetting}
+          className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-red-600 bg-red-50 border border-red-200 rounded-lg hover:bg-red-100 transition-colors disabled:opacity-50"
+        >
+          <Trash2 size={14} />
+          {resetting ? 'Clearing…' : 'Clear All Data'}
+        </button>
+      </div>
 
       <div className="card mb-6">
         <div className="flex items-center justify-between mb-3">
-          <h3 className="font-semibold text-gray-900">Required Columns (exact names)</h3>
+          <h3 className="font-semibold text-gray-900">Required Columns</h3>
           <button onClick={downloadSampleCSV} className="btn-secondary text-xs py-1.5">
             <Download size={14} /> Download Template
           </button>
         </div>
-        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 mb-3">
           {['LocationCode', 'ItemNo', 'No2', 'Description', 'Inventory', 'BinCode', 'ZoneCode', 'SerialNo', 'MacId', 'DeviceId'].map(col => (
             <code key={col} className="text-xs bg-gray-100 px-2 py-1 rounded font-mono">{col}</code>
           ))}
         </div>
-        <p className="text-xs text-gray-500 mt-3">
+        <div className="flex items-center gap-2 mb-2">
+          <span className="text-xs text-gray-500 font-medium">Optional:</span>
+          <code className="text-xs bg-blue-50 border border-blue-200 px-2 py-1 rounded font-mono text-blue-700">LpnBoxId</code>
+          <span className="text-xs text-gray-400">Physical box / pallet label on the rack</span>
+        </div>
+        <p className="text-xs text-gray-500 mt-1">
           Accepted formats: <strong>.csv</strong> or <strong>.xlsx</strong> · Each upload replaces existing inventory.
         </p>
         <p className="text-xs text-gray-500 mt-1">

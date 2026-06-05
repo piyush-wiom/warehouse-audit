@@ -261,8 +261,9 @@ router.get('/:id/bin-stats/:binCode', requireAuth, async (req, res) => {
   const stats = computeBinStats(inventoryRows, allScans, currentScans);
   const status = computeBinStatus(stats, !!session.endTime);
   const sessionEnded = !!session.endTime;
+  const lpnBoxId = inventoryRows[0]?.lpnBoxId || null;
 
-  res.json({ ...stats, status, sessionEnded, scans: currentScans, allScans });
+  res.json({ ...stats, status, sessionEnded, scans: currentScans, allScans, lpnBoxId });
 });
 
 module.exports = router;

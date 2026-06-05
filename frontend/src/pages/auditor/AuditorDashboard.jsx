@@ -34,10 +34,15 @@ function BinCard({ a, stats }) {
       className="card flex items-center justify-between hover:shadow-md transition-shadow cursor-pointer"
     >
       <div className="flex-1">
-        <div className="flex items-center gap-2 mb-1">
+        <div className="flex items-center gap-2 mb-1 flex-wrap">
           <span className="font-medium text-gray-900">{a.warehouse}</span>
           <span className="text-gray-400">›</span>
           <span className="font-mono font-semibold">{a.binCode}</span>
+          {a.lpnBoxId && (
+            <span className="text-xs bg-amber-50 border border-amber-200 text-amber-700 px-2 py-0.5 rounded font-mono">
+              📦 {a.lpnBoxId}
+            </span>
+          )}
           <span className={STATUS_BADGE[status] || 'badge-pending'}>{status}</span>
         </div>
         <div className="flex gap-4 text-sm text-gray-500">

@@ -20,6 +20,7 @@ export default function ScanBin() {
   const [stats, setStats] = useState({ expected: 0, matched: 0, variance: 0, remaining: 0, totalScanned: 0, status: 'Pending', sessionEnded: false });
   const [scanLog, setScanLog] = useState([]);
   const [allScans, setAllScans] = useState([]);
+  const [lpnBoxId, setLpnBoxId] = useState(null);
   const [scanInput, setScanInput] = useState('');
   const [scanType, setScanType] = useState('Auto');
   const [ending, setEnding] = useState(false);
@@ -68,6 +69,7 @@ export default function ScanBin() {
       setStats(data);
       setScanLog(data.scans || []);
       setAllScans(data.allScans || []);
+      if (data.lpnBoxId) setLpnBoxId(data.lpnBoxId);
     } catch { }
   }
 
@@ -144,7 +146,14 @@ export default function ScanBin() {
       <div className="flex items-center gap-3 mb-6">
         <button onClick={() => navigate('/auditor')} className="btn-secondary p-2"><ArrowLeft size={18} /></button>
         <div className="flex-1">
-          <h2 className="text-lg font-bold text-gray-900">{bin}</h2>
+          <div className="flex items-center gap-2 flex-wrap">
+            <h2 className="text-lg font-bold text-gray-900">{bin}</h2>
+            {lpnBoxId && (
+              <span className="text-sm bg-amber-50 border border-amber-200 text-amber-700 px-2 py-0.5 rounded font-mono">
+                📦 {lpnBoxId}
+              </span>
+            )}
+          </div>
           <p className="text-sm text-gray-500">{wh}</p>
         </div>
         {!stats.sessionEnded && session && (

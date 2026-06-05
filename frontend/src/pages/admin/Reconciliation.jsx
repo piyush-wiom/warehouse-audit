@@ -36,7 +36,14 @@ function BinDetailModal({ warehouse, binCode, onClose }) {
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200">
           <div>
-            <h3 className="font-bold text-gray-900 text-lg">{binCode}</h3>
+            <div className="flex items-center gap-2">
+              <h3 className="font-bold text-gray-900 text-lg">{binCode}</h3>
+              {detail?.lpnBoxId && (
+                <span className="text-sm bg-amber-50 border border-amber-200 text-amber-700 px-2 py-0.5 rounded font-mono">
+                  📦 {detail.lpnBoxId}
+                </span>
+              )}
+            </div>
             <p className="text-sm text-gray-500">{warehouse}</p>
           </div>
           <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-lg transition-colors">
@@ -290,14 +297,14 @@ export default function Reconciliation() {
         <table className="w-full text-sm">
           <thead className="bg-gray-50 border-b border-gray-200">
             <tr>
-              {['Warehouse', 'Bin', 'Audit Date', 'Expected', 'Matched', 'Variance', 'Remaining', 'Scanned', 'Status', 'Auditor', 'Correction'].map(h => (
+              {['Warehouse', 'Bin', 'LPN/Box ID', 'Audit Date', 'Expected', 'Matched', 'Variance', 'Remaining', 'Scanned', 'Status', 'Auditor', 'Correction'].map(h => (
                 <th key={h} className="px-3 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">{h}</th>
               ))}
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100">
             {loading ? (
-              <tr><td colSpan={11} className="px-4 py-8 text-center text-gray-400">Loading…</td></tr>
+              <tr><td colSpan={12} className="px-4 py-8 text-center text-gray-400">Loading…</td></tr>
             ) : rows.map((r, i) => (
               <tr
                 key={i}
@@ -307,6 +314,11 @@ export default function Reconciliation() {
               >
                 <td className="px-3 py-2.5 font-medium whitespace-nowrap">{r.warehouse}</td>
                 <td className="px-3 py-2.5 font-mono text-xs font-semibold text-blue-700">{r.bin}</td>
+                <td className="px-3 py-2.5">
+                  {r.lpnBoxId
+                    ? <span className="text-xs bg-amber-50 border border-amber-200 text-amber-700 px-1.5 py-0.5 rounded font-mono">📦 {r.lpnBoxId}</span>
+                    : <span className="text-xs text-gray-300">—</span>}
+                </td>
                 <td className="px-3 py-2.5 text-xs text-gray-500 whitespace-nowrap">
                   {r.sessionDate ? new Date(r.sessionDate).toLocaleDateString('en-IN') : '—'}
                 </td>
@@ -325,7 +337,7 @@ export default function Reconciliation() {
               </tr>
             ))}
             {!loading && rows.length === 0 && (
-              <tr><td colSpan={11} className="px-4 py-8 text-center text-gray-400">No data for selected filters.</td></tr>
+              <tr><td colSpan={12} className="px-4 py-8 text-center text-gray-400">No data for selected filters.</td></tr>
             )}
           </tbody>
         </table>

@@ -86,15 +86,14 @@ router.get('/my-with-stats', requireAuth, async (req, res) => {
     const binCodes  = [...new Set(assignments.map(a => a.binCode))];
 
     // Bulk fetch in parallel
-    const [allSessions, inventoryGroups] = await Promise.all([
+    const [allSessions, inventoryRows] = await Promise.all([
       prisma.auditSession.findMany({
         where: { warehouse: { in: warehouses } },
         orderBy: { startTime: 'desc' },
       }),
-      prisma.inventory.groupBy({
-        by: ['locationCode', 'binCode'],
+      prisma.inventory.findMany({
         where: { locationCode: { in: warehouses }, binCode: { in: binCodes } },
-        _count: { id: true },
+        select: { locationCode: true, binCode: true, lpnBoxId: true },
       }),
     ]);
 
@@ -118,10 +117,13 @@ router.get('/my-with-stats', requireAuth, async (req, res) => {
       scansBySessionBin[key].push(scan);
     }
 
-    // Index expected counts
+    // Build expected count and lpnBoxId maps from inventory rows
     const expectedMap = {};
-    for (const g of inventoryGroups) {
-      expectedMap[`${g.locationCode}::${g.binCode}`] = g._count.id;
+    const lpnBoxIdMap = {};
+    for (const row of inventoryRows) {
+      const key = `${row.locationCode}::${row.binCode}`;
+      expectedMap[key] = (expectedMap[key] || 0) + 1;
+      if (row.lpnBoxId && !lpnBoxIdMap[key]) lpnBoxIdMap[key] = row.lpnBoxId;
     }
 
     const result = assignments.map(a => {
@@ -152,6 +154,7 @@ router.get('/my-with-stats', requireAuth, async (req, res) => {
       const expected  = expectedMap[`${a.warehouse}::${a.binCode}`] || 0;
       const remaining = Math.max(0, expected - matched);
       const sessionEnded = latestSessionOverall ? !!latestSessionOverall.endTime : false;
+      const lpnBoxId  = lpnBoxIdMap[`${a.warehouse}::${a.binCode}`] || null;
 
       // Identical logic to reconciliation computeBinStatus
       let status;
@@ -162,7 +165,7 @@ router.get('/my-with-stats', requireAuth, async (req, res) => {
       else if (!sessionEnded)                           status = 'Scanning';
       else                                              status = 'Short';
 
-      return { ...a, stats: { expected, matched, variance, remaining, status, sessionEnded } };
+      return { ...a, lpnBoxId, stats: { expected, matched, variance, remaining, status, sessionEnded } };
     });
 
     res.json(result);

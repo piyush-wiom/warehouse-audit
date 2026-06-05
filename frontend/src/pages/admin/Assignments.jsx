@@ -36,7 +36,10 @@ export default function Assignments() {
     if (u.status === 'fulfilled') setAuditors(u.value.data.filter(u => u.role === 'auditor' && u.isActive));
     if (r.status === 'fulfilled') {
       const map = {};
-      for (const row of r.value.data) map[`${row.warehouse}::${row.bin}`] = row.finalStatus;
+      for (const row of r.value.data) {
+        const key = `${row.warehouse}::${row.bin}`;
+        map[key] = { status: row.finalStatus, lpnBoxId: row.lpnBoxId || null };
+      }
       setStatusMap(map);
     }
   }
@@ -213,6 +216,11 @@ export default function Assignments() {
                                   : <Square size={16} className="text-gray-400 shrink-0" />
                                 }
                                 <span className="font-mono text-sm font-medium">{bin.binCode}</span>
+                                {bin.lpnBoxId && (
+                                  <span className="text-xs bg-amber-50 border border-amber-200 text-amber-600 px-1.5 py-0.5 rounded font-mono">
+                                    📦 {bin.lpnBoxId}
+                                  </span>
+                                )}
                                 {bin.inventory && <span className="text-xs text-gray-400">{bin.inventory}</span>}
                               </div>
                             ))
@@ -255,18 +263,25 @@ export default function Assignments() {
         <table className="w-full text-sm">
           <thead className="bg-gray-50 border-b border-gray-200">
             <tr>
-              {['Warehouse', 'Bin', 'Status', 'Assigned To', 'Assigned By', 'Date', ''].map(h => (
+              {['Warehouse', 'Bin', 'LPN/Box ID', 'Status', 'Assigned To', 'Assigned By', 'Date', ''].map(h => (
                 <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">{h}</th>
               ))}
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100">
             {filteredAssignments.map(a => {
-              const status = statusMap[`${a.warehouse}::${a.binCode}`] || 'Pending';
+              const binInfo = statusMap[`${a.warehouse}::${a.binCode}`] || {};
+              const status = binInfo.status || 'Pending';
+              const lpnBoxId = binInfo.lpnBoxId || null;
               return (
                 <tr key={a.id} className="hover:bg-gray-50">
                   <td className="px-4 py-3 font-medium">{a.warehouse}</td>
                   <td className="px-4 py-3 font-mono text-sm">{a.binCode}</td>
+                  <td className="px-4 py-3">
+                    {lpnBoxId
+                      ? <span className="text-xs bg-amber-50 border border-amber-200 text-amber-700 px-2 py-0.5 rounded font-mono">📦 {lpnBoxId}</span>
+                      : <span className="text-xs text-gray-300">—</span>}
+                  </td>
                   <td className="px-4 py-3"><span className={STATUS_BADGE[status] || 'badge-pending'}>{status}</span></td>
                   <td className="px-4 py-3 text-gray-600">{a.assignedTo}</td>
                   <td className="px-4 py-3 text-gray-500">{a.assignedBy}</td>
@@ -285,7 +300,7 @@ export default function Assignments() {
               );
             })}
             {filteredAssignments.length === 0 && (
-              <tr><td colSpan={7} className="px-4 py-8 text-center text-gray-400">
+              <tr><td colSpan={8} className="px-4 py-8 text-center text-gray-400">
                 {userSearch ? `No assignments matching "${userSearch}"` : 'No assignments yet'}
               </td></tr>
             )}

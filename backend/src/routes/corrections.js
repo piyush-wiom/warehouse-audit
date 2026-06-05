@@ -64,9 +64,14 @@ router.get('/flagged', requireAdmin, async (req, res) => {
         orderBy: { correctedAt: 'desc' },
       });
 
+      const lpnBoxId = scans.length > 0
+        ? (await prisma.inventory.findFirst({ where: { locationCode, binCode }, select: { lpnBoxId: true } }))?.lpnBoxId || null
+        : null;
+
       flagged.push({
         warehouse: locationCode,
         bin: binCode,
+        lpnBoxId,
         expected,
         matched,
         variance,

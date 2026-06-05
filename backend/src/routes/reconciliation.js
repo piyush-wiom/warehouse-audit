@@ -38,12 +38,24 @@ function computeBinStatus(matched, expected, variance, sessionEnded) {
 async function buildReconciliation(warehouseFilter, statusFilter, dateFrom, dateTo) {
   const inventoryWhere = warehouseFilter ? { locationCode: warehouseFilter } : {};
 
-  // Fetch all inventory bins
-  const allBins = await prisma.inventory.groupBy({
-    by: ['locationCode', 'binCode'],
-    where: inventoryWhere,
-    _count: { id: true },
-  });
+  // Fetch all inventory bins (count + lpnBoxId)
+  const [allBins, lpnBoxIdRows] = await Promise.all([
+    prisma.inventory.groupBy({
+      by: ['locationCode', 'binCode'],
+      where: inventoryWhere,
+      _count: { id: true },
+    }),
+    prisma.inventory.findMany({
+      where: inventoryWhere,
+      select: { locationCode: true, binCode: true, lpnBoxId: true },
+      distinct: ['locationCode', 'binCode'],
+    }),
+  ]);
+
+  const lpnBoxIdMap = {};
+  for (const r of lpnBoxIdRows) {
+    lpnBoxIdMap[`${r.locationCode}::${r.binCode}`] = r.lpnBoxId || null;
+  }
 
   // Date filter — applied only to determine which sessions to consider for "latest session" display
   const sessionDateFilter = {};
@@ -141,6 +153,7 @@ async function buildReconciliation(warehouseFilter, statusFilter, dateFrom, date
       return {
         warehouse: locationCode, bin: binCode, expected,
         matched, variance, totalScanned, remaining,
+        lpnBoxId: lpnBoxIdMap[`${locationCode}::${binCode}`] || null,
         originalStatus: status,
         finalStatus: correction ? 'Corrected' : status,
         reauditVariance: latestSessionForBin?.isReaudit ? variance : null,
@@ -184,7 +197,7 @@ router.get('/export', requireAdmin, async (req, res) => {
     const filename = `reconciliation_${today}.csv`;
 
     const headers = [
-      'Warehouse', 'Bin', 'Audit Date', 'Expected', 'Matched', 'Variance',
+      'Warehouse', 'Bin', 'LPN/Box ID', 'Audit Date', 'Expected', 'Matched', 'Variance',
       'Remaining', 'Total Scanned', 'Original Status', 'Final Status',
       'Re-audit Variance', 'Re-audit By', 'Auditor', 'Correction Remark',
     ];
@@ -193,7 +206,7 @@ router.get('/export', requireAdmin, async (req, res) => {
       headers.join(','),
       ...data.map(r =>
         [
-          r.warehouse, r.bin,
+          r.warehouse, r.bin, r.lpnBoxId ?? '',
           r.sessionDate ? fmtDate(r.sessionDate) : '',
           r.expected, r.matched, r.variance, r.remaining, r.totalScanned,
           r.originalStatus, r.finalStatus,
@@ -260,7 +273,7 @@ router.get('/export-detailed', requireAdmin, async (req, res) => {
     }
 
     const headers = [
-      'Warehouse', 'Bin', 'Audit Date', 'Bin Status', 'Device Status',
+      'Warehouse', 'Bin', 'LPN/Box ID', 'Audit Date', 'Bin Status', 'Device Status',
       'Serial No', 'Mac ID', 'Device ID', 'Description', 'Type (No2)',
       'Inventory Type', 'Scan Type', 'Scanned At', 'Auditor',
     ];
@@ -289,13 +302,14 @@ router.get('/export-detailed', requireAdmin, async (req, res) => {
       if (status && binStatus !== status) continue;
 
       const auditDate = latestSess ? fmtDate(latestSess.startTime) : '';
+      const lpnBoxId = inventoryRows[0]?.lpnBoxId || '';
 
       // 1. Matched
       for (const scan of scans.filter(s => s.matched)) {
         const sess = sessionMap[scan.sessionId];
         const inv = inventoryRows.find(r => r.serialNo && r.serialNo.toUpperCase() === (scan.serialNo || '').toUpperCase());
         csvRows.push([
-          wh, bin, auditDate, binStatus, 'Matched',
+          wh, bin, lpnBoxId, auditDate, binStatus, 'Matched',
           scan.serialNo || '', scan.macId || '', scan.deviceId || '',
           `"${(inv?.description || '').replace(/"/g, '""')}"`,
           inv?.no2 || '', inv?.inventory || '',
@@ -308,7 +322,7 @@ router.get('/export-detailed', requireAdmin, async (req, res) => {
       for (const inv of inventoryRows) {
         if (!inv.serialNo || matchedSerials.has(inv.serialNo.toUpperCase())) continue;
         csvRows.push([
-          wh, bin, auditDate, binStatus, 'Missing',
+          wh, bin, lpnBoxId, auditDate, binStatus, 'Missing',
           inv.serialNo || '', inv.macId || '', inv.deviceId || '',
           `"${(inv.description || '').replace(/"/g, '""')}"`,
           inv.no2 || '', inv.inventory || '',
@@ -320,7 +334,7 @@ router.get('/export-detailed', requireAdmin, async (req, res) => {
       for (const scan of scans.filter(s => !s.matched)) {
         const sess = sessionMap[scan.sessionId];
         csvRows.push([
-          wh, bin, auditDate, binStatus, 'Variance',
+          wh, bin, lpnBoxId, auditDate, binStatus, 'Variance',
           scan.extractedSerial || '', '', '', '', '', '',
           scan.scanType || '', fmtDateTime(scan.scannedAt),
           sess?.auditorEmail || '',
@@ -491,7 +505,8 @@ router.get('/bin-detail/:warehouse/:binCode', requireAdmin, async (req, res) => 
       .filter(s => !s.matched)
       .map(s => ({ ...s, auditorEmail: sessionMap[s.sessionId]?.auditorEmail }));
 
-    res.json({ warehouse, binCode, expected: inventory.length, matched, missing, variance });
+    const lpnBoxId = inventory[0]?.lpnBoxId || null;
+    res.json({ warehouse, binCode, expected: inventory.length, lpnBoxId, matched, missing, variance });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });
