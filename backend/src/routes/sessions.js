@@ -99,8 +99,21 @@ router.post('/:id/scan', requireAuth, async (req, res) => {
       where: { locationCode: session.warehouse, binCode: bin_code },
     });
 
-    // Fix 4: Get ALL historical scans across all sessions for duplicate check
+    // Get ALL historical scans across all sessions
     const allHistoricalScans = await getAllBinScans(session.warehouse, bin_code);
+
+    // Fix 1: Block scan if bin already complete (matched >= expected)
+    const expectedCount = inventoryRows.length;
+    const alreadyMatchedSerials = new Set(
+      allHistoricalScans.filter(s => s.matched && s.serialNo).map(s => s.serialNo.toUpperCase())
+    );
+    if (expectedCount > 0 && alreadyMatchedSerials.size >= expectedCount) {
+      return res.status(400).json({
+        status: 'bin_complete',
+        error: `Bin is complete — all ${expectedCount} devices already matched. No more scans needed.`,
+      });
+    }
+
     const normInput = normalizeMAC(extractedSerial);
 
     // Cross-ID duplicate detection across ALL sessions
@@ -141,6 +154,18 @@ router.post('/:id/scan', requireAuth, async (req, res) => {
           deviceId: row.deviceId, scanType,
         },
       });
+
+      // Auto-lock bin when this scan completes the expected count
+      const newTotalMatched = alreadyMatchedSerials.size + 1;
+      if (expectedCount > 0 && newTotalMatched >= expectedCount) {
+        await prisma.auditSession.update({ where: { id }, data: { endTime: new Date() } });
+        return res.json({
+          status: 'matched',
+          message: `✓ Matched: ${extractedSerial} | ${row.no2 || ''} | ${row.description || ''} | ${scanType}`,
+          scan, inventory: row, auto_locked: true,
+        });
+      }
+
       return res.json({
         status: 'matched',
         message: `✓ Matched: ${extractedSerial} | ${row.no2 || ''} | ${row.description || ''} | ${scanType}`,

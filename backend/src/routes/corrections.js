@@ -30,20 +30,31 @@ router.get('/flagged', requireAdmin, async (req, res) => {
         warehouse: locationCode,
         ...(Object.keys(sessionDateFilter).length > 0 ? { startTime: sessionDateFilter } : {}),
       };
-      const session = await prisma.auditSession.findFirst({
+      const sessions = await prisma.auditSession.findMany({
         where: sessionWhere,
         orderBy: { startTime: 'desc' },
       });
-      if (!session || !session.endTime) continue;
+      // Need at least one ended session in range
+      const latestEnded = sessions.find(s => s.endTime);
+      if (!latestEnded) continue;
 
+      // Cross-session scans for this bin
+      const allSessionIds = sessions.map(s => s.id);
       const scans = await prisma.scannedDevice.findMany({
-        where: { sessionId: session.id, binCode },
+        where: { sessionId: { in: allSessionIds }, binCode },
       });
-      const matched = scans.filter(s => s.matched).length;
+
+      // Deduped matched count across all sessions
+      const matchedSerials = new Set(
+        scans.filter(s => s.matched && s.serialNo).map(s => s.serialNo.toUpperCase())
+      );
+      const matched = matchedSerials.size;
       const variance = scans.filter(s => !s.matched).length;
 
+      // Skip bins that are fully complete (scanned qty == expected qty, no variance)
+      if (matched === expected && variance === 0) continue;
+
       let status;
-      if (matched === expected && variance === 0) continue; // Complete — not flagged
       if (matched > expected) status = 'Excess';
       else if (variance > 0) status = 'Variance';
       else status = 'Short';
@@ -60,9 +71,9 @@ router.get('/flagged', requireAdmin, async (req, res) => {
         matched,
         variance,
         status,
-        auditor: session.auditorEmail,
+        auditor: latestEnded.auditorEmail,
         varianceSerials: scans.filter(s => !s.matched).map(s => s.extractedSerial),
-        missingSerials: [], // populated from inventory
+        missingSerials: [],
         correction: correction || null,
       });
     }

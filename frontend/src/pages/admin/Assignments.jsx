@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import api from '../../lib/api';
 import toast from 'react-hot-toast';
-import { Plus, CheckSquare, Square, Users } from 'lucide-react';
+import { Plus, CheckSquare, Square, Users, Search } from 'lucide-react';
 
 export default function Assignments() {
   const [assignments, setAssignments] = useState([]);
@@ -13,6 +13,7 @@ export default function Assignments() {
   const [selectedBins, setSelectedBins] = useState([]);
   const [showForm, setShowForm] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [userSearch, setUserSearch] = useState('');
 
   async function load() {
     const [a, w, u] = await Promise.allSettled([
@@ -81,6 +82,9 @@ export default function Assignments() {
 
   const unassignedBins = bins.filter(b => !b.isAssigned);
   const allSelected = unassignedBins.length > 0 && selectedBins.length === unassignedBins.length;
+  const filteredAssignments = assignments.filter(a =>
+    !userSearch || a.assignedTo.toLowerCase().includes(userSearch.toLowerCase())
+  );
 
   return (
     <div>
@@ -158,6 +162,19 @@ export default function Assignments() {
         </form>
       )}
 
+      <div className="flex items-center gap-2 mb-3">
+        <Search size={16} className="text-gray-400 shrink-0" />
+        <input
+          className="input flex-1 max-w-xs"
+          placeholder="Filter by username or email…"
+          value={userSearch}
+          onChange={e => setUserSearch(e.target.value)}
+        />
+        {userSearch && (
+          <span className="text-xs text-gray-400">{filteredAssignments.length} of {assignments.length}</span>
+        )}
+      </div>
+
       <div className="card overflow-x-auto p-0">
         <table className="w-full text-sm">
           <thead className="bg-gray-50 border-b border-gray-200">
@@ -168,7 +185,7 @@ export default function Assignments() {
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100">
-            {assignments.map(a => (
+            {filteredAssignments.map(a => (
               <tr key={a.id} className="hover:bg-gray-50">
                 <td className="px-4 py-3 font-medium">{a.warehouse}</td>
                 <td className="px-4 py-3 font-mono text-sm">{a.binCode}</td>
@@ -177,8 +194,10 @@ export default function Assignments() {
                 <td className="px-4 py-3 text-gray-400 text-xs">{new Date(a.createdAt).toLocaleDateString('en-IN')}</td>
               </tr>
             ))}
-            {assignments.length === 0 && (
-              <tr><td colSpan={5} className="px-4 py-8 text-center text-gray-400">No assignments yet</td></tr>
+            {filteredAssignments.length === 0 && (
+              <tr><td colSpan={5} className="px-4 py-8 text-center text-gray-400">
+                {userSearch ? `No assignments matching "${userSearch}"` : 'No assignments yet'}
+              </td></tr>
             )}
           </tbody>
         </table>

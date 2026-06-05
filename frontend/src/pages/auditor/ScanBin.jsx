@@ -99,6 +99,13 @@ export default function ScanBin() {
       });
       const logEntry = { ...data.scan, status: data.status, message: data.message, id: Date.now() };
       setScanLog(prev => [logEntry, ...prev]);
+
+      if (data.auto_locked) {
+        toast.success('Bin complete! All devices matched — bin auto-locked.', { duration: 4000 });
+        await refreshStats(session.id, true);
+        return;
+      }
+
       await refreshStats(session.id, false);
       if (data.status === 'matched') toast.success(data.message, { duration: 2000 });
       else if (data.status === 'variance') toast.error(data.message, { duration: 3000 });

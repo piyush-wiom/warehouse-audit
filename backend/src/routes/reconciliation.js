@@ -24,24 +24,28 @@ function fmtDateTime(d) {
   return `${dd}-${mm}-${yyyy} ${hh}:${min}`;
 }
 
+// Fix 3: status no longer requires session to be ended
 function computeBinStatus(matched, expected, variance, sessionEnded) {
-  if (!sessionEnded) return 'Scanning';
+  if (matched === 0 && variance === 0) return 'Pending';
   if (matched === expected && variance === 0) return 'Complete';
   if (matched > expected) return 'Excess';
+  if (variance > 0 && matched < expected) return 'Variance';
   if (variance > 0) return 'Variance';
+  if (!sessionEnded && matched > 0 && matched < expected) return 'Scanning';
   return 'Short';
 }
 
 async function buildReconciliation(warehouseFilter, statusFilter, dateFrom, dateTo) {
   const inventoryWhere = warehouseFilter ? { locationCode: warehouseFilter } : {};
 
+  // Fetch all inventory bins
   const allBins = await prisma.inventory.groupBy({
     by: ['locationCode', 'binCode'],
     where: inventoryWhere,
     _count: { id: true },
   });
 
-  // Date filter for sessions
+  // Date filter — applied only to determine which sessions to consider for "latest session" display
   const sessionDateFilter = {};
   if (dateFrom) sessionDateFilter.gte = new Date(dateFrom);
   if (dateTo) {
@@ -49,60 +53,93 @@ async function buildReconciliation(warehouseFilter, statusFilter, dateFrom, date
     end.setHours(23, 59, 59, 999);
     sessionDateFilter.lte = end;
   }
-  const sessionWhere = Object.keys(sessionDateFilter).length > 0
-    ? { startTime: sessionDateFilter }
-    : {};
+  const hasDateFilter = Object.keys(sessionDateFilter).length > 0;
 
-  const rows = await Promise.all(
-    allBins.map(async ({ locationCode, binCode, _count }) => {
+  // Bulk fetch ALL sessions and scans for efficiency
+  const allSessions = await prisma.auditSession.findMany({
+    where: warehouseFilter ? { warehouse: warehouseFilter } : {},
+    orderBy: { startTime: 'desc' },
+  });
+
+  const sessionIds = allSessions.map(s => s.id);
+  const allScans = sessionIds.length > 0
+    ? await prisma.scannedDevice.findMany({ where: { sessionId: { in: sessionIds } } })
+    : [];
+
+  const allCorrections = await prisma.correction.findMany({
+    where: warehouseFilter ? { warehouse: warehouseFilter } : {},
+    orderBy: { correctedAt: 'desc' },
+  });
+
+  // Group sessions by warehouse
+  const sessionsByWH = {};
+  for (const s of allSessions) {
+    if (!sessionsByWH[s.warehouse]) sessionsByWH[s.warehouse] = [];
+    sessionsByWH[s.warehouse].push(s);
+  }
+
+  // Group scans by sessionId+binCode
+  const scansBySessionBin = {};
+  for (const scan of allScans) {
+    const key = `${scan.sessionId}::${scan.binCode}`;
+    if (!scansBySessionBin[key]) scansBySessionBin[key] = [];
+    scansBySessionBin[key].push(scan);
+  }
+
+  // Group corrections by warehouse+bin
+  const correctionsByBin = {};
+  for (const c of allCorrections) {
+    const key = `${c.warehouse}::${c.binCode}`;
+    if (!correctionsByBin[key]) correctionsByBin[key] = c;
+  }
+
+  const rows = allBins.map(({ locationCode, binCode, _count }) => {
       const expected = _count.id;
+      const whSessions = sessionsByWH[locationCode] || [];
 
-      const latestSession = await prisma.auditSession.findFirst({
-        where: { warehouse: locationCode, ...sessionWhere },
-        orderBy: { startTime: 'desc' },
-      });
+      // Latest session overall (for sessionEnded status)
+      const latestSessionOverall = whSessions[0] || null;
 
-      const corrections = await prisma.correction.findMany({
-        where: { warehouse: locationCode, binCode },
-        orderBy: { correctedAt: 'desc' },
-        take: 1,
-      });
+      // Latest session within date filter (for display: auditor, sessionDate)
+      const sessionsInRange = hasDateFilter
+        ? whSessions.filter(s => {
+            const t = new Date(s.startTime);
+            if (sessionDateFilter.gte && t < sessionDateFilter.gte) return false;
+            if (sessionDateFilter.lte && t > sessionDateFilter.lte) return false;
+            return true;
+          })
+        : whSessions;
 
-      if (!latestSession) {
-        return {
-          warehouse: locationCode, bin: binCode, expected,
-          matched: 0, variance: 0, totalScanned: 0, remaining: expected,
-          originalStatus: 'Pending', finalStatus: 'Pending',
-          reauditVariance: null, reauditBy: null, auditor: null,
-          correction: corrections[0] || null,
-          sessionDate: null,
-        };
-      }
+      const latestSession = sessionsInRange[0] || null;
 
-      const scans = await prisma.scannedDevice.findMany({
-        where: { sessionId: latestSession.id, binCode },
-      });
+      // Aggregate ALL scans for this bin across ALL sessions (cross-session logic)
+      const allBinScans = whSessions.flatMap(s => scansBySessionBin[`${s.id}::${binCode}`] || []);
 
-      const matched = scans.filter(s => s.matched).length;
-      const variance = scans.filter(s => !s.matched).length;
-      const totalScanned = scans.length;
+      // Matched = unique serial numbers matched across all sessions
+      const matchedSerials = new Set(
+        allBinScans.filter(s => s.matched && s.serialNo).map(s => s.serialNo.toUpperCase())
+      );
+      const matched = matchedSerials.size;
+      const variance = allBinScans.filter(s => !s.matched).length;
+      const totalScanned = matched + variance;
       const remaining = Math.max(0, expected - matched);
-      const sessionEnded = !!latestSession.endTime;
+      // Use the actual latest session (not date-filtered) to determine if bin is locked
+      const sessionEnded = latestSessionOverall ? !!latestSessionOverall.endTime : false;
       const status = computeBinStatus(matched, expected, variance, sessionEnded);
+      const correction = correctionsByBin[`${locationCode}::${binCode}`] || null;
 
       return {
         warehouse: locationCode, bin: binCode, expected,
         matched, variance, totalScanned, remaining,
         originalStatus: status,
-        finalStatus: corrections[0] ? 'Corrected' : status,
-        reauditVariance: latestSession.isReaudit ? variance : null,
-        reauditBy: latestSession.isReaudit ? latestSession.auditorEmail : null,
-        auditor: latestSession.auditorEmail,
-        correction: corrections[0] || null,
-        sessionDate: latestSession.startTime,
+        finalStatus: correction ? 'Corrected' : status,
+        reauditVariance: latestSession?.isReaudit ? variance : null,
+        reauditBy: latestSession?.isReaudit ? latestSession.auditorEmail : null,
+        auditor: latestSession?.auditorEmail || null,
+        correction,
+        sessionDate: latestSession?.startTime || null,
       };
-    })
-  );
+    });
 
   const filtered = statusFilter
     ? rows.filter(r => r.finalStatus === statusFilter || r.originalStatus === statusFilter)
@@ -284,6 +321,76 @@ router.get('/export-detailed', requireAdmin, async (req, res) => {
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', `attachment; filename="reconciliation_detailed_${today}.csv"`);
     res.send(csvRows.join('\n'));
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/reconciliation/daily-stats — per-day aggregated metrics
+router.get('/daily-stats', requireAdmin, async (req, res) => {
+  try {
+    const { warehouse, date_from, date_to } = req.query;
+
+    const where = {};
+    if (warehouse) where.warehouse = warehouse;
+    if (date_from || date_to) {
+      where.startTime = {};
+      if (date_from) where.startTime.gte = new Date(date_from);
+      if (date_to) {
+        const end = new Date(date_to);
+        end.setHours(23, 59, 59, 999);
+        where.startTime.lte = end;
+      }
+    }
+
+    const sessions = await prisma.auditSession.findMany({
+      where,
+      include: { _count: { select: { scans: true } } },
+      orderBy: { startTime: 'asc' },
+    });
+
+    // Group by calendar date (YYYY-MM-DD) and auditor
+    const byDate = {};
+    for (const s of sessions) {
+      const day = new Date(s.startTime).toISOString().slice(0, 10);
+      if (!byDate[day]) byDate[day] = { sessions: [], auditorScans: {} };
+      byDate[day].sessions.push(s);
+      const email = s.auditorEmail;
+      byDate[day].auditorScans[email] = (byDate[day].auditorScans[email] || 0) + s._count.scans;
+    }
+
+    // For each day get the bin-level data from reconciliation
+    const reconData = await buildReconciliation(warehouse, null, date_from, date_to);
+    const binsByDate = {};
+    for (const r of reconData) {
+      if (!r.sessionDate) continue;
+      const day = new Date(r.sessionDate).toISOString().slice(0, 10);
+      if (!binsByDate[day]) binsByDate[day] = [];
+      binsByDate[day].push(r);
+    }
+
+    const allDays = [...new Set([...Object.keys(byDate), ...Object.keys(binsByDate)])].sort();
+
+    const result = allDays.map(day => {
+      const dayBins = binsByDate[day] || [];
+      const total = dayBins.length;
+      const complete = dayBins.filter(r => r.finalStatus === 'Complete' || r.finalStatus === 'Corrected').length;
+      const discrepancy = dayBins.filter(r => ['Short', 'Excess', 'Variance'].includes(r.finalStatus)).length;
+      const daySessions = byDate[day]?.sessions || [];
+      const auditorScans = byDate[day]?.auditorScans || {};
+
+      return {
+        date: day,
+        totalAudits: total,
+        completionRate: total > 0 ? Math.round((complete / total) * 100) : 0,
+        discrepancyRate: total > 0 ? Math.round((discrepancy / total) * 100) : 0,
+        totalSessions: daySessions.length,
+        auditorScans,
+      };
+    });
+
+    res.json(result);
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });
