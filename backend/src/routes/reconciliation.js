@@ -113,24 +113,30 @@ async function buildReconciliation(warehouseFilter, statusFilter, dateFrom, date
       // Aggregate ALL scans for this bin across ALL sessions (cross-session logic)
       const allBinScans = whSessions.flatMap(s => scansBySessionBin[`${s.id}::${binCode}`] || []);
 
-      // Matched = unique serial numbers matched across all sessions
+      // Matched = unique serial numbers matched across ALL sessions (cumulative, deduped)
       const matchedSerials = new Set(
         allBinScans.filter(s => s.matched && s.serialNo).map(s => s.serialNo.toUpperCase())
       );
       const matched = matchedSerials.size;
-      const variance = allBinScans.filter(s => !s.matched).length;
-      const totalScanned = matched + variance;
       const remaining = Math.max(0, expected - matched);
-
-      // Use the actual latest session (not date-filtered) to determine if bin is locked
-      const sessionEnded = latestSessionOverall ? !!latestSessionOverall.endTime : false;
-      const status = computeBinStatus(matched, expected, variance, sessionEnded);
-      const correction = correctionsByBin[`${locationCode}::${binCode}`] || null;
 
       // Audit date & auditor = latest session in range that ACTUALLY scanned this bin
       const latestSessionForBin = sessionsInRange.find(s =>
         (scansBySessionBin[`${s.id}::${binCode}`] || []).length > 0
       ) || null;
+
+      // Variance = only from the LATEST session for this bin (not accumulated across sessions)
+      // This ensures a clean re-audit correctly resets variance to 0
+      const latestSessionScans = latestSessionForBin
+        ? (scansBySessionBin[`${latestSessionForBin.id}::${binCode}`] || [])
+        : [];
+      const variance = latestSessionScans.filter(s => !s.matched).length;
+      const totalScanned = matched + variance;
+
+      // Use the actual latest session (not date-filtered) to determine if bin is locked
+      const sessionEnded = latestSessionOverall ? !!latestSessionOverall.endTime : false;
+      const status = computeBinStatus(matched, expected, variance, sessionEnded);
+      const correction = correctionsByBin[`${locationCode}::${binCode}`] || null;
 
       return {
         warehouse: locationCode, bin: binCode, expected,
