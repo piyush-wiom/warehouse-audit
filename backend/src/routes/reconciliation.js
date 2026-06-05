@@ -97,10 +97,10 @@ async function buildReconciliation(warehouseFilter, statusFilter, dateFrom, date
       const expected = _count.id;
       const whSessions = sessionsByWH[locationCode] || [];
 
-      // Latest session overall (for sessionEnded status)
+      // Latest session overall (for sessionEnded status — not date-filtered)
       const latestSessionOverall = whSessions[0] || null;
 
-      // Latest session within date filter (for display: auditor, sessionDate)
+      // Sessions within date filter
       const sessionsInRange = hasDateFilter
         ? whSessions.filter(s => {
             const t = new Date(s.startTime);
@@ -109,8 +109,6 @@ async function buildReconciliation(warehouseFilter, statusFilter, dateFrom, date
             return true;
           })
         : whSessions;
-
-      const latestSession = sessionsInRange[0] || null;
 
       // Aggregate ALL scans for this bin across ALL sessions (cross-session logic)
       const allBinScans = whSessions.flatMap(s => scansBySessionBin[`${s.id}::${binCode}`] || []);
@@ -123,21 +121,28 @@ async function buildReconciliation(warehouseFilter, statusFilter, dateFrom, date
       const variance = allBinScans.filter(s => !s.matched).length;
       const totalScanned = matched + variance;
       const remaining = Math.max(0, expected - matched);
+
       // Use the actual latest session (not date-filtered) to determine if bin is locked
       const sessionEnded = latestSessionOverall ? !!latestSessionOverall.endTime : false;
       const status = computeBinStatus(matched, expected, variance, sessionEnded);
       const correction = correctionsByBin[`${locationCode}::${binCode}`] || null;
+
+      // Audit date & auditor = latest session in range that ACTUALLY scanned this bin
+      const latestSessionForBin = sessionsInRange.find(s =>
+        (scansBySessionBin[`${s.id}::${binCode}`] || []).length > 0
+      ) || null;
 
       return {
         warehouse: locationCode, bin: binCode, expected,
         matched, variance, totalScanned, remaining,
         originalStatus: status,
         finalStatus: correction ? 'Corrected' : status,
-        reauditVariance: latestSession?.isReaudit ? variance : null,
-        reauditBy: latestSession?.isReaudit ? latestSession.auditorEmail : null,
-        auditor: latestSession?.auditorEmail || null,
+        reauditVariance: latestSessionForBin?.isReaudit ? variance : null,
+        reauditBy: latestSessionForBin?.isReaudit ? latestSessionForBin.auditorEmail : null,
+        auditor: latestSessionForBin?.auditorEmail || null,
         correction,
-        sessionDate: latestSession?.startTime || null,
+        // Only show audit date if this bin was actually scanned
+        sessionDate: latestSessionForBin?.startTime || null,
       };
     });
 
