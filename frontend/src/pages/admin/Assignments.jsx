@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import api from '../../lib/api';
 import toast from 'react-hot-toast';
-import { Plus, CheckSquare, Square, Users, Search } from 'lucide-react';
+import { Plus, CheckSquare, Square, Users, Search, Trash2 } from 'lucide-react';
 
 export default function Assignments() {
   const [assignments, setAssignments] = useState([]);
@@ -50,6 +50,17 @@ export default function Assignments() {
       setSelectedBins([]);
     } else {
       setSelectedBins(unassigned);
+    }
+  }
+
+  async function handleUnassign(id, binCode) {
+    if (!confirm(`Unassign bin ${binCode}?`)) return;
+    try {
+      await api.delete(`/assignments/${id}`);
+      toast.success(`Unassigned ${binCode}`);
+      load();
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to unassign');
     }
   }
 
@@ -179,7 +190,7 @@ export default function Assignments() {
         <table className="w-full text-sm">
           <thead className="bg-gray-50 border-b border-gray-200">
             <tr>
-              {['Warehouse', 'Bin', 'Assigned To', 'Assigned By', 'Date'].map(h => (
+              {['Warehouse', 'Bin', 'Assigned To', 'Assigned By', 'Date', ''].map(h => (
                 <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">{h}</th>
               ))}
             </tr>
@@ -192,10 +203,19 @@ export default function Assignments() {
                 <td className="px-4 py-3 text-gray-600">{a.assignedTo}</td>
                 <td className="px-4 py-3 text-gray-500">{a.assignedBy}</td>
                 <td className="px-4 py-3 text-gray-400 text-xs">{new Date(a.createdAt).toLocaleDateString('en-IN')}</td>
+                <td className="px-4 py-3">
+                  <button
+                    onClick={() => handleUnassign(a.id, a.binCode)}
+                    className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                    title="Unassign bin"
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </td>
               </tr>
             ))}
             {filteredAssignments.length === 0 && (
-              <tr><td colSpan={5} className="px-4 py-8 text-center text-gray-400">
+              <tr><td colSpan={6} className="px-4 py-8 text-center text-gray-400">
                 {userSearch ? `No assignments matching "${userSearch}"` : 'No assignments yet'}
               </td></tr>
             )}

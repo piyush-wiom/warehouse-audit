@@ -55,6 +55,15 @@ router.post('/', requireAdmin, async (req, res) => {
   });
 });
 
+// DELETE /api/assignments/:id  (admin — remove a single assignment)
+router.delete('/:id', requireAdmin, async (req, res) => {
+  const { id } = req.params;
+  const assignment = await prisma.assignment.findUnique({ where: { id } });
+  if (!assignment) return res.status(404).json({ error: 'Assignment not found' });
+  await prisma.assignment.delete({ where: { id } });
+  res.json({ message: `Unassigned bin ${assignment.binCode} from ${assignment.assignedTo}` });
+});
+
 // GET /api/assignments/my  (auditor — their assigned bins)
 router.get('/my', requireAuth, async (req, res) => {
   const assignments = await prisma.assignment.findMany({
