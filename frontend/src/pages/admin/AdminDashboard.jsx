@@ -17,11 +17,11 @@ function StatCard({ icon: Icon, label, value, color }) {
 }
 
 const today = new Date().toISOString().slice(0, 10);
-const sevenDaysAgo = (() => { const d = new Date(); d.setDate(d.getDate() - 6); return d.toISOString().slice(0, 10); })();
+const thirtyDaysAgo = (() => { const d = new Date(); d.setDate(d.getDate() - 29); return d.toISOString().slice(0, 10); })();
 
 export default function AdminDashboard() {
   const [stats, setStats] = useState(null);
-  const [dateRange, setDateRange] = useState({ from: sevenDaysAgo, to: today });
+  const [dateRange, setDateRange] = useState({ from: thirtyDaysAgo, to: today });
   const [dailyStats, setDailyStats] = useState([]);
   const [dailyLoading, setDailyLoading] = useState(false);
   const [auditorStats, setAuditorStats] = useState([]);

@@ -181,9 +181,7 @@ export default function Reconciliation() {
     }
   }
 
-  useEffect(() => {
-    if (filters.date_from || filters.date_to || true) load();
-  }, [filters]);
+  useEffect(() => { load(); }, [filters]);
 
   async function handleDetailedExport() {
     try {

@@ -10,10 +10,15 @@ export default function Corrections() {
   const [loading, setLoading] = useState(true);
   const [remarkMap, setRemarkMap] = useState({});
   const [reauditMap, setReauditMap] = useState({});
-  const [filters, setFilters] = useState({
-    warehouse: '',
-    date_from: new Date().toISOString().slice(0, 10), // default: today
-    date_to: new Date().toISOString().slice(0, 10),
+  const [filters, setFilters] = useState(() => {
+    const to = new Date();
+    const from = new Date();
+    from.setDate(from.getDate() - 30);
+    return {
+      warehouse: '',
+      date_from: from.toISOString().slice(0, 10), // default: last 30 days
+      date_to: to.toISOString().slice(0, 10),
+    };
   });
 
   async function load() {
@@ -108,14 +113,15 @@ export default function Corrections() {
           </div>
 
           <button
-            onClick={() => setFilters({
-              warehouse: '',
-              date_from: new Date().toISOString().slice(0, 10),
-              date_to: new Date().toISOString().slice(0, 10),
-            })}
+            onClick={() => {
+              const to = new Date();
+              const from = new Date();
+              from.setDate(from.getDate() - 30);
+              setFilters({ warehouse: '', date_from: from.toISOString().slice(0, 10), date_to: to.toISOString().slice(0, 10) });
+            }}
             className="text-sm text-blue-600 hover:underline"
           >
-            Reset to today
+            Reset to last 30 days
           </button>
         </div>
         <p className="text-xs text-gray-400 mt-2">

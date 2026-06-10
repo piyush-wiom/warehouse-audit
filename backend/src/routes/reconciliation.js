@@ -169,10 +169,9 @@ async function buildReconciliation(warehouseFilter, statusFilter, dateFrom, date
     ? rows.filter(r => r.finalStatus === statusFilter || r.originalStatus === statusFilter)
     : rows;
 
-  // If date filter active, exclude bins with no matching session
-  return dateFrom || dateTo
-    ? filtered.filter(r => r.sessionDate !== null)
-    : filtered;
+  // Always return all inventory bins — date filter only affects which session's
+  // audit date/auditor is displayed, never hides bins from the list
+  return filtered;
 }
 
 // GET /api/reconciliation
