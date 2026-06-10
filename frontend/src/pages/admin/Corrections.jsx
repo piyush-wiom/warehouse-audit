@@ -157,7 +157,8 @@ export default function Corrections() {
                       <span className={STATUS_BADGE[bin.status] || 'badge-pending'}>{bin.status}</span>
                     </div>
                     <p className="text-sm text-gray-500">
-                      Expected: {bin.expected} · Matched: {bin.matched} · Variance: {bin.variance} · Auditor: {bin.auditor}
+                      {bin.expected !== null ? `Expected: ${bin.expected} · ` : ''}Matched: {bin.matched} · Variance: {bin.variance} · Auditor: {bin.auditor || '—'}
+                      {bin.isHistorical && <span className="ml-2 text-xs bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded">previous inventory</span>}
                     </p>
                   </div>
                   {bin.correction && (

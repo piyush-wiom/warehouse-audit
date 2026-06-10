@@ -8,13 +8,8 @@ router.get('/flagged', requireAdmin, async (req, res) => {
   try {
     const { warehouse, date_from, date_to } = req.query;
 
-    const allBins = await prisma.inventory.groupBy({
-      by: ['locationCode', 'binCode'],
-      where: warehouse ? { locationCode: warehouse } : {},
-      _count: { id: true },
-    });
-
-    // Build session date filter
+    // Build date filter — used ONLY to find which session to show as "auditor" (display only)
+    // Scans from ALL sessions (not just the date range) are used for matched/variance calculation
     const sessionDateFilter = {};
     if (date_from) sessionDateFilter.gte = new Date(date_from);
     if (date_to) {
@@ -22,64 +17,147 @@ router.get('/flagged', requireAdmin, async (req, res) => {
       end.setHours(23, 59, 59, 999);
       sessionDateFilter.lte = end;
     }
+    const hasDateFilter = Object.keys(sessionDateFilter).length > 0;
+
+    // Fetch ALL sessions for the warehouse — no date filter on this query
+    const allSessions = await prisma.auditSession.findMany({
+      where: warehouse ? { warehouse } : {},
+      orderBy: { startTime: 'desc' },
+    });
+
+    if (allSessions.length === 0) return res.json([]);
+
+    // Fetch ALL scans in bulk for efficiency
+    const allSessionIds = allSessions.map(s => s.id);
+    const allScans = await prisma.scannedDevice.findMany({
+      where: { sessionId: { in: allSessionIds } },
+    });
+
+    // Group scans by binCode
+    const scansByBin = {};
+    for (const scan of allScans) {
+      const wh = allSessions.find(s => s.id === scan.sessionId)?.warehouse;
+      if (!wh) continue;
+      const key = `${wh}::${scan.binCode}`;
+      if (!scansByBin[key]) scansByBin[key] = [];
+      scansByBin[key].push({ ...scan, warehouse: wh });
+    }
+
+    // Build session lookup by warehouse
+    const sessionsByWH = {};
+    for (const s of allSessions) {
+      if (!sessionsByWH[s.warehouse]) sessionsByWH[s.warehouse] = [];
+      sessionsByWH[s.warehouse].push(s);
+    }
+
+    // Get current inventory bins
+    const allBins = await prisma.inventory.groupBy({
+      by: ['locationCode', 'binCode'],
+      where: warehouse ? { locationCode: warehouse } : {},
+      _count: { id: true },
+    });
+
+    // Also get bins from historical scans not in current inventory
+    const currentBinKeys = new Set(allBins.map(b => `${b.locationCode}::${b.binCode}`));
+    const historicalBinKeys = new Set();
+    for (const key of Object.keys(scansByBin)) {
+      if (!currentBinKeys.has(key)) historicalBinKeys.add(key);
+    }
+
+    const binsToCheck = [
+      ...allBins.map(b => ({ locationCode: b.locationCode, binCode: b.binCode, expected: b._count.id })),
+      ...[...historicalBinKeys].map(key => {
+        const [loc, bin] = key.split('::');
+        return { locationCode: loc, binCode: bin, expected: null }; // historical: unknown expected
+      }),
+    ];
+
+    const allCorrections = await prisma.correction.findMany({
+      where: warehouse ? { warehouse } : {},
+      orderBy: { correctedAt: 'desc' },
+    });
+    const correctionsByBin = {};
+    for (const c of allCorrections) {
+      correctionsByBin[`${c.warehouse}::${c.binCode}`] = c;
+    }
+
+    const lpnMap = {};
+    const lpnRows = await prisma.inventory.findMany({
+      where: warehouse ? { locationCode: warehouse } : {},
+      select: { locationCode: true, binCode: true, lpnBoxId: true },
+      distinct: ['locationCode', 'binCode'],
+    });
+    for (const r of lpnRows) lpnMap[`${r.locationCode}::${r.binCode}`] = r.lpnBoxId || null;
 
     const flagged = [];
-    for (const { locationCode, binCode, _count } of allBins) {
-      const expected = _count.id;
-      const sessionWhere = {
-        warehouse: locationCode,
-        ...(Object.keys(sessionDateFilter).length > 0 ? { startTime: sessionDateFilter } : {}),
-      };
-      const sessions = await prisma.auditSession.findMany({
-        where: sessionWhere,
-        orderBy: { startTime: 'desc' },
-      });
-      // Need at least one ended session in range
-      const latestEnded = sessions.find(s => s.endTime);
-      if (!latestEnded) continue;
 
-      // Cross-session scans for this bin
-      const allSessionIds = sessions.map(s => s.id);
-      const scans = await prisma.scannedDevice.findMany({
-        where: { sessionId: { in: allSessionIds }, binCode },
-      });
+    for (const { locationCode, binCode, expected } of binsToCheck) {
+      const binKey = `${locationCode}::${binCode}`;
+      const scans = scansByBin[binKey] || [];
+      if (scans.length === 0) continue;
 
-      // Deduped matched count across all sessions
+      // Deduped matched count across ALL sessions (no date filter)
       const matchedSerials = new Set(
         scans.filter(s => s.matched && s.serialNo).map(s => s.serialNo.toUpperCase())
       );
       const matched = matchedSerials.size;
       const variance = scans.filter(s => !s.matched).length;
 
-      // Skip bins that are fully complete (scanned qty == expected qty, no variance)
-      if (matched === expected && variance === 0) continue;
+      // For historical bins (no longer in inventory), expected = matched (best we know)
+      const effectiveExpected = expected !== null ? expected : matched;
+
+      // Skip bins that are fully complete with no issues
+      if (matched === effectiveExpected && variance === 0) continue;
+      // Also skip Pending bins (no scans matched at all and no variance)
+      if (matched === 0 && variance === 0) continue;
 
       let status;
-      if (matched > expected) status = 'Excess';
+      if (matched > effectiveExpected) status = 'Excess';
       else if (variance > 0) status = 'Variance';
       else status = 'Short';
 
-      const correction = await prisma.correction.findFirst({
-        where: { warehouse: locationCode, binCode },
-        orderBy: { correctedAt: 'desc' },
-      });
+      // Find the display auditor: latest ended session in date range (or any ended session)
+      const whSessions = sessionsByWH[locationCode] || [];
+      const sessionsInRange = hasDateFilter
+        ? whSessions.filter(s => {
+            const t = new Date(s.startTime);
+            if (sessionDateFilter.gte && t < sessionDateFilter.gte) return false;
+            if (sessionDateFilter.lte && t > sessionDateFilter.lte) return false;
+            return true;
+          })
+        : whSessions;
 
-      const lpnBoxId = scans.length > 0
-        ? (await prisma.inventory.findFirst({ where: { locationCode, binCode }, select: { lpnBoxId: true } }))?.lpnBoxId || null
-        : null;
+      const latestEndedInRange = sessionsInRange.find(s => s.endTime);
+      const latestEndedAny = whSessions.find(s => s.endTime);
+      const displaySession = latestEndedInRange || latestEndedAny;
+
+      // If there's a date filter but no ended session in range, skip unless it has historical data
+      if (hasDateFilter && !latestEndedInRange) {
+        // Still show if it has current audit issues (scanned recently)
+        const scansInRange = scans.filter(s => {
+          const t = new Date(s.scannedAt);
+          if (sessionDateFilter.gte && t < sessionDateFilter.gte) return false;
+          if (sessionDateFilter.lte && t > sessionDateFilter.lte) return false;
+          return true;
+        });
+        if (scansInRange.length === 0) continue;
+      }
+
+      const correction = correctionsByBin[binKey] || null;
 
       flagged.push({
         warehouse: locationCode,
         bin: binCode,
-        lpnBoxId,
-        expected,
+        lpnBoxId: lpnMap[binKey] || null,
+        expected: expected !== null ? expected : null,
         matched,
         variance,
         status,
-        auditor: latestEnded.auditorEmail,
+        auditor: displaySession?.auditorEmail || null,
         varianceSerials: scans.filter(s => !s.matched).map(s => s.extractedSerial),
         missingSerials: [],
         correction: correction || null,
+        isHistorical: expected === null,
       });
     }
 

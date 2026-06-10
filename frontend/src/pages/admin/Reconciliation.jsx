@@ -310,7 +310,12 @@ export default function Reconciliation() {
                 onClick={() => setSelectedBin({ warehouse: r.warehouse, binCode: r.bin })}
                 title="Click to see device-level detail"
               >
-                <td className="px-3 py-2.5 font-medium whitespace-nowrap">{r.warehouse}</td>
+                <td className="px-3 py-2.5 font-medium whitespace-nowrap">
+                  {r.warehouse}
+                  {r.isHistorical && (
+                    <span className="ml-1 text-xs bg-gray-100 text-gray-500 px-1 py-0.5 rounded">prev</span>
+                  )}
+                </td>
                 <td className="px-3 py-2.5 font-mono text-xs font-semibold text-blue-700">{r.bin}</td>
                 <td className="px-3 py-2.5">
                   {r.lpnBoxId
@@ -320,7 +325,7 @@ export default function Reconciliation() {
                 <td className="px-3 py-2.5 text-xs text-gray-500 whitespace-nowrap">
                   {r.sessionDate ? new Date(r.sessionDate).toLocaleDateString('en-IN') : '—'}
                 </td>
-                <td className="px-3 py-2.5 text-center">{r.expected}</td>
+                <td className="px-3 py-2.5 text-center">{r.expected ?? '—'}</td>
                 <td className="px-3 py-2.5 text-center text-green-700 font-medium">{r.matched}</td>
                 <td className="px-3 py-2.5 text-center text-red-700 font-medium">{r.variance}</td>
                 <td className="px-3 py-2.5 text-center">{r.remaining}</td>

@@ -67,7 +67,7 @@ async function buildReconciliation(warehouseFilter, statusFilter, dateFrom, date
   }
   const hasDateFilter = Object.keys(sessionDateFilter).length > 0;
 
-  // Bulk fetch ALL sessions and scans for efficiency
+  // Bulk fetch ALL sessions and scans for efficiency (NO date filter — we need ALL history)
   const allSessions = await prisma.auditSession.findMany({
     where: warehouseFilter ? { warehouse: warehouseFilter } : {},
     orderBy: { startTime: 'desc' },
@@ -105,72 +105,119 @@ async function buildReconciliation(warehouseFilter, statusFilter, dateFrom, date
     if (!correctionsByBin[key]) correctionsByBin[key] = c;
   }
 
-  const rows = allBins.map(({ locationCode, binCode, _count }) => {
-      const expected = _count.id;
-      const whSessions = sessionsByWH[locationCode] || [];
+  // Helper: compute stats for a single bin given its sessions and scans
+  function computeBinRow({ locationCode, binCode, expected, lpnBoxId, isHistorical }) {
+    const whSessions = sessionsByWH[locationCode] || [];
 
-      // Latest session overall (for sessionEnded status — not date-filtered)
-      const latestSessionOverall = whSessions[0] || null;
+    // Latest session overall (for sessionEnded status — not date-filtered)
+    const latestSessionOverall = whSessions[0] || null;
 
-      // Sessions within date filter
-      const sessionsInRange = hasDateFilter
-        ? whSessions.filter(s => {
-            const t = new Date(s.startTime);
-            if (sessionDateFilter.gte && t < sessionDateFilter.gte) return false;
-            if (sessionDateFilter.lte && t > sessionDateFilter.lte) return false;
-            return true;
-          })
-        : whSessions;
+    // Sessions within date filter (only affects display: audit date + auditor shown)
+    const sessionsInRange = hasDateFilter
+      ? whSessions.filter(s => {
+          const t = new Date(s.startTime);
+          if (sessionDateFilter.gte && t < sessionDateFilter.gte) return false;
+          if (sessionDateFilter.lte && t > sessionDateFilter.lte) return false;
+          return true;
+        })
+      : whSessions;
 
-      // Aggregate ALL scans for this bin across ALL sessions (cross-session logic)
-      const allBinScans = whSessions.flatMap(s => scansBySessionBin[`${s.id}::${binCode}`] || []);
+    // Aggregate ALL scans for this bin across ALL sessions (cross-session, no date filter)
+    const allBinScans = whSessions.flatMap(s => scansBySessionBin[`${s.id}::${binCode}`] || []);
 
-      // Matched = unique serial numbers matched across ALL sessions (cumulative, deduped)
-      const matchedSerials = new Set(
-        allBinScans.filter(s => s.matched && s.serialNo).map(s => s.serialNo.toUpperCase())
-      );
-      const matched = matchedSerials.size;
-      const remaining = Math.max(0, expected - matched);
+    // Matched = unique serial numbers matched across ALL sessions (cumulative, deduped)
+    const matchedSerials = new Set(
+      allBinScans.filter(s => s.matched && s.serialNo).map(s => s.serialNo.toUpperCase())
+    );
+    const matched = matchedSerials.size;
 
-      // Audit date & auditor = latest session in range that ACTUALLY scanned this bin
-      const latestSessionForBin = sessionsInRange.find(s =>
-        (scansBySessionBin[`${s.id}::${binCode}`] || []).length > 0
-      ) || null;
+    // Audit date & auditor = latest session in range that ACTUALLY scanned this bin
+    // For display only — if no session in range scanned this bin, show — but keep the bin visible
+    const latestSessionForBin = sessionsInRange.find(s =>
+      (scansBySessionBin[`${s.id}::${binCode}`] || []).length > 0
+    ) || null;
 
-      // Variance = only from the LATEST session for this bin (not accumulated across sessions)
-      // This ensures a clean re-audit correctly resets variance to 0
-      const latestSessionScans = latestSessionForBin
-        ? (scansBySessionBin[`${latestSessionForBin.id}::${binCode}`] || [])
-        : [];
-      const variance = latestSessionScans.filter(s => !s.matched).length;
-      const totalScanned = matched + variance;
+    // If nothing in range, fall back to the LATEST session overall that has scans for this bin
+    // This ensures audit data always shows even if date filter doesn't cover it
+    const latestSessionForBinAny = allBinScans.length > 0
+      ? whSessions.find(s => (scansBySessionBin[`${s.id}::${binCode}`] || []).length > 0) || null
+      : null;
 
-      // Use the actual latest session (not date-filtered) to determine if bin is locked
-      const sessionEnded = latestSessionOverall ? !!latestSessionOverall.endTime : false;
-      const status = computeBinStatus(matched, expected, variance, sessionEnded);
-      const correction = correctionsByBin[`${locationCode}::${binCode}`] || null;
+    const displaySession = latestSessionForBin || latestSessionForBinAny;
 
-      return {
-        warehouse: locationCode, bin: binCode, expected,
-        matched, variance, totalScanned, remaining,
-        lpnBoxId: lpnBoxIdMap[`${locationCode}::${binCode}`] || null,
-        originalStatus: status,
-        finalStatus: correction ? 'Corrected' : status,
-        reauditVariance: latestSessionForBin?.isReaudit ? variance : null,
-        reauditBy: latestSessionForBin?.isReaudit ? latestSessionForBin.auditorEmail : null,
-        auditor: latestSessionForBin?.auditorEmail || null,
-        correction,
-        // Only show audit date if this bin was actually scanned
-        sessionDate: latestSessionForBin?.startTime || null,
-      };
-    });
+    // Variance = only from the LATEST session for this bin (not accumulated across sessions)
+    const latestSessionScans = displaySession
+      ? (scansBySessionBin[`${displaySession.id}::${binCode}`] || [])
+      : [];
+    const variance = latestSessionScans.filter(s => !s.matched).length;
+    const totalScanned = matched + variance;
+
+    // For historical bins (no longer in current inventory), expected = matched (best we can do)
+    const effectiveExpected = isHistorical ? matched : expected;
+    const remaining = Math.max(0, effectiveExpected - matched);
+
+    // Use the actual latest session (not date-filtered) to determine if bin is locked
+    const sessionEnded = latestSessionOverall ? !!latestSessionOverall.endTime : false;
+    const status = isHistorical
+      ? (matched === 0 ? 'Pending' : variance > 0 ? 'Variance' : 'Complete')
+      : computeBinStatus(matched, effectiveExpected, variance, sessionEnded);
+    const correction = correctionsByBin[`${locationCode}::${binCode}`] || null;
+
+    return {
+      warehouse: locationCode,
+      bin: binCode,
+      expected: isHistorical ? null : expected,
+      matched,
+      variance,
+      totalScanned,
+      remaining,
+      lpnBoxId: lpnBoxId || null,
+      originalStatus: status,
+      finalStatus: correction ? 'Corrected' : status,
+      reauditVariance: displaySession?.isReaudit ? variance : null,
+      reauditBy: displaySession?.isReaudit ? displaySession.auditorEmail : null,
+      auditor: displaySession?.auditorEmail || null,
+      correction,
+      sessionDate: displaySession?.startTime || null,
+      isHistorical: isHistorical || false,
+    };
+  }
+
+  // Build rows for CURRENT inventory bins
+  const inventoryRows = allBins.map(({ locationCode, binCode, _count }) =>
+    computeBinRow({
+      locationCode,
+      binCode,
+      expected: _count.id,
+      lpnBoxId: lpnBoxIdMap[`${locationCode}::${binCode}`] || null,
+      isHistorical: false,
+    })
+  );
+
+  // Build rows for HISTORICAL bins — audited bins no longer in current inventory
+  // This shows audit data from previous inventory uploads that have since been replaced
+  const currentBinKeys = new Set(inventoryRows.map(r => `${r.warehouse}::${r.bin}`));
+
+  const historicalScannedBins = await prisma.scannedDevice.findMany({
+    where: warehouseFilter ? { warehouse: warehouseFilter } : {},
+    select: { warehouse: true, binCode: true },
+    distinct: ['warehouse', 'binCode'],
+  });
+
+  const historicalRows = historicalScannedBins
+    .filter(({ warehouse: wh, binCode }) => !currentBinKeys.has(`${wh}::${binCode}`))
+    .map(({ warehouse: wh, binCode }) =>
+      computeBinRow({ locationCode: wh, binCode, expected: 0, lpnBoxId: null, isHistorical: true })
+    )
+    .filter(r => r.totalScanned > 0); // only show historical bins that actually have scans
+
+  const allRows = [...inventoryRows, ...historicalRows];
 
   const filtered = statusFilter
-    ? rows.filter(r => r.finalStatus === statusFilter || r.originalStatus === statusFilter)
-    : rows;
+    ? allRows.filter(r => r.finalStatus === statusFilter || r.originalStatus === statusFilter)
+    : allRows;
 
-  // Always return all inventory bins — date filter only affects which session's
-  // audit date/auditor is displayed, never hides bins from the list
+  // Always return all bins — current inventory + historical audit bins
   return filtered;
 }
 
