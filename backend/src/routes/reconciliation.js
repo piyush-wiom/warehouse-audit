@@ -281,20 +281,25 @@ router.get('/export-detailed', requireAdmin, async (req, res) => {
   try {
     const { warehouse, status, date_from, date_to } = req.query;
 
-    // Build date filter once
+    // Build date filter (for sessions display — scans outside range are still included)
     const sessionDateFilter = {};
     if (date_from) sessionDateFilter.gte = new Date(date_from);
     if (date_to) { const e = new Date(date_to); e.setHours(23, 59, 59, 999); sessionDateFilter.lte = e; }
     const hasDateFilter = Object.keys(sessionDateFilter).length > 0;
 
-    // Fetch everything in 3 bulk queries
+    // Always use latest upload for expected counts (inventory)
+    const latestUpload = await prisma.inventoryUpload.findFirst({ orderBy: { createdAt: 'desc' } });
+    const invWhere = {
+      ...(latestUpload ? { uploadId: latestUpload.id } : {}),
+      ...(warehouse ? { locationCode: warehouse } : {}),
+    };
+
+    // Fetch inventory (latest upload only) + ALL sessions (no date filter on sessions)
     const [allInventory, allSessions] = await Promise.all([
-      prisma.inventory.findMany({ where: warehouse ? { locationCode: warehouse } : {} }),
+      prisma.inventory.findMany({ where: invWhere }),
       prisma.auditSession.findMany({
-        where: {
-          ...(warehouse ? { warehouse } : {}),
-          ...(hasDateFilter ? { startTime: sessionDateFilter } : {}),
-        },
+        where: warehouse ? { warehouse } : {},
+        orderBy: { startTime: 'desc' },
         select: { id: true, startTime: true, auditorEmail: true, warehouse: true, endTime: true },
       }),
     ]);
@@ -306,7 +311,7 @@ router.get('/export-detailed', requireAdmin, async (req, res) => {
       ? await prisma.scannedDevice.findMany({ where: { sessionId: { in: sessionIds } } })
       : [];
 
-    // Group by warehouse::bin
+    // Group inventory by warehouse::bin
     const invByBin = {};
     for (const inv of allInventory) {
       const key = `${inv.locationCode}::${inv.binCode}`;
@@ -314,6 +319,7 @@ router.get('/export-detailed', requireAdmin, async (req, res) => {
       invByBin[key].push(inv);
     }
 
+    // Group scans by warehouse::bin, and track latest scan session per bin
     const scansByBin = {};
     for (const scan of allScans) {
       const sess = sessionMap[scan.sessionId];
@@ -321,6 +327,18 @@ router.get('/export-detailed', requireAdmin, async (req, res) => {
       const key = `${sess.warehouse}::${scan.binCode}`;
       if (!scansByBin[key]) scansByBin[key] = [];
       scansByBin[key].push(scan);
+    }
+
+    // For each bin, find the latest session that actually HAS scans for it
+    // This gives us the correct bin-level audit date (not warehouse-level)
+    const latestBinSession = {};
+    for (const scan of allScans) {
+      const sess = sessionMap[scan.sessionId];
+      if (!sess) continue;
+      const key = `${sess.warehouse}::${scan.binCode}`;
+      if (!latestBinSession[key] || new Date(sess.startTime) > new Date(latestBinSession[key].startTime)) {
+        latestBinSession[key] = sess;
+      }
     }
 
     const headers = [
@@ -332,6 +350,7 @@ router.get('/export-detailed', requireAdmin, async (req, res) => {
     // BOM for Excel UTF-8
     const csvRows = ['﻿' + headers.join(',')];
 
+    // Include current inventory bins + historical bins from scans
     const allBinKeys = new Set([...Object.keys(invByBin), ...Object.keys(scansByBin)]);
 
     for (const binKey of allBinKeys) {
@@ -344,23 +363,28 @@ router.get('/export-detailed', requireAdmin, async (req, res) => {
       const variance = scans.filter(s => !s.matched).length;
       const expected = inventoryRows.length;
 
-      const latestSess = allSessions
-        .filter(s => s.warehouse === wh)
-        .sort((a, b) => new Date(b.startTime) - new Date(a.startTime))[0];
+      // Bin-level latest session (only sessions that have scans for this bin)
+      const binLatestSess = latestBinSession[binKey] || null;
 
-      const binStatus = computeBinStatus(matched, expected, variance, !!latestSess?.endTime);
+      // Warehouse latest session (for sessionEnded status)
+      const whLatestSess = allSessions.find(s => s.warehouse === wh) || null;
+
+      const binStatus = computeBinStatus(matched, expected, variance, !!whLatestSess?.endTime);
 
       if (status && binStatus !== status) continue;
 
-      const auditDate = latestSess ? fmtDate(latestSess.startTime) : '';
+      // Audit date = date of the latest session that ACTUALLY scanned this bin
+      // Blank for bins never scanned (Pending)
+      const auditDate = binLatestSess ? fmtDate(binLatestSess.startTime) : '';
       const lpnBoxId = inventoryRows[0]?.lpnBoxId || '';
 
-      // 1. Matched
+      // 1. Matched — use scan's own session date as audit date
       for (const scan of scans.filter(s => s.matched)) {
         const sess = sessionMap[scan.sessionId];
+        const scanAuditDate = sess ? fmtDate(sess.startTime) : auditDate;
         const inv = inventoryRows.find(r => r.serialNo && r.serialNo.toUpperCase() === (scan.serialNo || '').toUpperCase());
         csvRows.push([
-          wh, bin, lpnBoxId, auditDate, binStatus, 'Matched',
+          wh, bin, lpnBoxId, scanAuditDate, binStatus, 'Matched',
           scan.serialNo || '', scan.macId || '', scan.deviceId || '',
           `"${(inv?.description || '').replace(/"/g, '""')}"`,
           inv?.no2 || '', inv?.inventory || '',
@@ -369,7 +393,7 @@ router.get('/export-detailed', requireAdmin, async (req, res) => {
         ].join(','));
       }
 
-      // 2. Missing
+      // 2. Missing — use the latest bin session date (blank if never scanned)
       for (const inv of inventoryRows) {
         if (!inv.serialNo || matchedSerials.has(inv.serialNo.toUpperCase())) continue;
         csvRows.push([
@@ -381,11 +405,12 @@ router.get('/export-detailed', requireAdmin, async (req, res) => {
         ].join(','));
       }
 
-      // 3. Variance
+      // 3. Variance — use scan's own session date
       for (const scan of scans.filter(s => !s.matched)) {
         const sess = sessionMap[scan.sessionId];
+        const scanAuditDate = sess ? fmtDate(sess.startTime) : auditDate;
         csvRows.push([
-          wh, bin, lpnBoxId, auditDate, binStatus, 'Variance',
+          wh, bin, lpnBoxId, scanAuditDate, binStatus, 'Variance',
           scan.extractedSerial || '', '', '', '', '', '',
           scan.scanType || '', fmtDateTime(scan.scannedAt),
           sess?.auditorEmail || '',
