@@ -64,9 +64,9 @@ router.post('/upload', requireAdmin, upload.single('file'), async (req, res) => 
       return res.status(400).json({ error: `Missing required columns: ${missing.join(', ')}` });
     }
 
-    // Full refresh — delete old inventory
-    await prisma.inventory.deleteMany({});
-    await prisma.inventoryUpload.deleteMany({});
+    // Keep old inventory records for historical visibility.
+    // Each upload creates a NEW InventoryUpload record; old records stay.
+    // Active routes (reconciliation, assignments, etc.) always filter to the latest upload.
 
     const uploadRecord = await prisma.inventoryUpload.create({
       data: { filename: req.file.originalname, uploadedBy: req.user.email },
@@ -152,19 +152,20 @@ router.post('/upload', requireAdmin, upload.single('file'), async (req, res) => 
   }
 });
 
-// GET /api/inventory/warehouses
+// GET /api/inventory/warehouses — always from latest upload
 router.get('/warehouses', requireAuth, async (req, res) => {
-  const rows = await prisma.inventory.findMany({
-    select: { locationCode: true },
-    distinct: ['locationCode'],
-  });
+  const latest = await prisma.inventoryUpload.findFirst({ orderBy: { createdAt: 'desc' } });
+  const where = latest ? { uploadId: latest.id } : {};
+  const rows = await prisma.inventory.findMany({ where, select: { locationCode: true }, distinct: ['locationCode'] });
   res.json(rows.map(r => r.locationCode));
 });
 
-// GET /api/inventory/bins/:warehouse
+// GET /api/inventory/bins/:warehouse — always from latest upload
 router.get('/bins/:warehouse', requireAuth, async (req, res) => {
+  const latest = await prisma.inventoryUpload.findFirst({ orderBy: { createdAt: 'desc' } });
+  const where = { locationCode: req.params.warehouse, ...(latest ? { uploadId: latest.id } : {}) };
   const rows = await prisma.inventory.findMany({
-    where: { locationCode: req.params.warehouse },
+    where,
     select: { binCode: true, zoneCode: true, inventory: true, lpnBoxId: true },
     distinct: ['binCode'],
     orderBy: { binCode: 'asc' },

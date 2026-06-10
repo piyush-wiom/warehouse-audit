@@ -85,6 +85,9 @@ router.get('/my-with-stats', requireAuth, async (req, res) => {
     const warehouses = [...new Set(assignments.map(a => a.warehouse))];
     const binCodes  = [...new Set(assignments.map(a => a.binCode))];
 
+    // Always use latest upload for expected counts
+    const latestUpload = await prisma.inventoryUpload.findFirst({ orderBy: { createdAt: 'desc' } });
+
     // Bulk fetch in parallel
     const [allSessions, inventoryRows] = await Promise.all([
       prisma.auditSession.findMany({
@@ -92,7 +95,11 @@ router.get('/my-with-stats', requireAuth, async (req, res) => {
         orderBy: { startTime: 'desc' },
       }),
       prisma.inventory.findMany({
-        where: { locationCode: { in: warehouses }, binCode: { in: binCodes } },
+        where: {
+          locationCode: { in: warehouses },
+          binCode: { in: binCodes },
+          ...(latestUpload ? { uploadId: latestUpload.id } : {}),
+        },
         select: { locationCode: true, binCode: true, lpnBoxId: true },
       }),
     ]);

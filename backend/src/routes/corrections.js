@@ -50,10 +50,15 @@ router.get('/flagged', requireAdmin, async (req, res) => {
       sessionsByWH[s.warehouse].push(s);
     }
 
-    // Get current inventory bins
+    // Get current inventory bins from LATEST upload only
+    const latestUpload = await prisma.inventoryUpload.findFirst({ orderBy: { createdAt: 'desc' } });
+    const invWhere = {
+      ...(latestUpload ? { uploadId: latestUpload.id } : {}),
+      ...(warehouse ? { locationCode: warehouse } : {}),
+    };
     const allBins = await prisma.inventory.groupBy({
       by: ['locationCode', 'binCode'],
-      where: warehouse ? { locationCode: warehouse } : {},
+      where: invWhere,
       _count: { id: true },
     });
 
@@ -83,7 +88,7 @@ router.get('/flagged', requireAdmin, async (req, res) => {
 
     const lpnMap = {};
     const lpnRows = await prisma.inventory.findMany({
-      where: warehouse ? { locationCode: warehouse } : {},
+      where: invWhere,
       select: { locationCode: true, binCode: true, lpnBoxId: true },
       distinct: ['locationCode', 'binCode'],
     });

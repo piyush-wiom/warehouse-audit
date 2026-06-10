@@ -36,9 +36,14 @@ function computeBinStatus(matched, expected, variance, sessionEnded) {
 }
 
 async function buildReconciliation(warehouseFilter, statusFilter, dateFrom, dateTo) {
-  const inventoryWhere = warehouseFilter ? { locationCode: warehouseFilter } : {};
+  // Always use LATEST upload's bins for expected counts
+  const latestUpload = await prisma.inventoryUpload.findFirst({ orderBy: { createdAt: 'desc' } });
+  const inventoryWhere = {
+    ...(latestUpload ? { uploadId: latestUpload.id } : {}),
+    ...(warehouseFilter ? { locationCode: warehouseFilter } : {}),
+  };
 
-  // Fetch all inventory bins (count + lpnBoxId)
+  // Fetch all inventory bins (count + lpnBoxId) from latest upload only
   const [allBins, lpnBoxIdRows] = await Promise.all([
     prisma.inventory.groupBy({
       by: ['locationCode', 'binCode'],
