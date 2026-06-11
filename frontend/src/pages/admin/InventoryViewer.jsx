@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import api from '../../lib/api';
 import toast from 'react-hot-toast';
-import { Search, Package, Download } from 'lucide-react';
+import { Search, Package, Download, Trash2 } from 'lucide-react';
 
 export default function InventoryViewer() {
   const [warehouses, setWarehouses] = useState([]);
@@ -49,6 +49,21 @@ export default function InventoryViewer() {
   useEffect(() => {
     if (filters.warehouse) handleSearch();
   }, [filters.warehouse, filters.bin, filters.upload_id]);
+
+  async function handleDeleteUpload(uploadId) {
+    const u = uploads.find(u => u.id === uploadId);
+    if (!u) return;
+    if (!window.confirm(`Delete upload "${u.filename}" (${u.totalDevices} devices)?\n\nThis cannot be undone.`)) return;
+    try {
+      const { data } = await api.delete(`/inventory/uploads/${uploadId}`);
+      toast.success(data.message);
+      const updated = await api.get('/inventory/uploads');
+      setUploads(updated.data);
+      if (filters.upload_id === uploadId) setFilters(f => ({ ...f, upload_id: '' }));
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to delete upload');
+    }
+  }
 
   function handleDownload() {
     if (filtered.length === 0) return toast.error('No data to download');
@@ -117,14 +132,25 @@ export default function InventoryViewer() {
         <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
           <div>
             <label className="label">Upload Date</label>
-            <select className="input" value={filters.upload_id} onChange={e => setFilters(f => ({ ...f, upload_id: e.target.value }))}>
-              <option value="">All uploads</option>
-              {uploads.map(u => (
-                <option key={u.id} value={u.id}>
-                  {new Date(u.createdAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })} — {u.filename} ({u.totalDevices} devices)
-                </option>
-              ))}
-            </select>
+            <div className="flex gap-2 items-center">
+              <select className="input flex-1" value={filters.upload_id} onChange={e => setFilters(f => ({ ...f, upload_id: e.target.value }))}>
+                <option value="">All uploads</option>
+                {uploads.map((u, i) => (
+                  <option key={u.id} value={u.id}>
+                    {new Date(u.createdAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })} — {u.filename} ({u.totalDevices} devices){i === 0 ? ' ✓ Active' : ''}
+                  </option>
+                ))}
+              </select>
+              {filters.upload_id && uploads.length > 0 && filters.upload_id !== uploads[0].id && (
+                <button
+                  onClick={() => handleDeleteUpload(filters.upload_id)}
+                  className="p-2 text-red-500 hover:bg-red-50 rounded border border-red-200"
+                  title="Delete this upload"
+                >
+                  <Trash2 size={16} />
+                </button>
+              )}
+            </div>
           </div>
           <div>
             <label className="label">Warehouse</label>

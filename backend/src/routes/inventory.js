@@ -234,6 +234,29 @@ router.get('/upload-info', requireAdmin, async (req, res) => {
   res.json({ ...upload, totalDevices: count });
 });
 
+// DELETE /api/inventory/uploads/:id — delete a specific upload and its inventory records
+router.delete('/uploads/:id', requireAdmin, async (req, res) => {
+  try {
+    const upload = await prisma.inventoryUpload.findUnique({ where: { id: req.params.id } });
+    if (!upload) return res.status(404).json({ error: 'Upload not found' });
+
+    // Block deleting the latest upload — it's the active inventory
+    const latest = await prisma.inventoryUpload.findFirst({ orderBy: { createdAt: 'desc' } });
+    if (latest && latest.id === upload.id) {
+      return res.status(400).json({ error: 'Cannot delete the active (latest) inventory upload. Upload a new inventory file first.' });
+    }
+
+    const count = await prisma.inventory.count({ where: { uploadId: upload.id } });
+    await prisma.inventory.deleteMany({ where: { uploadId: upload.id } });
+    await prisma.inventoryUpload.delete({ where: { id: upload.id } });
+
+    res.json({ message: `Deleted upload "${upload.filename}" (${count} devices removed)` });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // DELETE /api/inventory/reset-all — wipe ALL audit data (admin only)
 router.delete('/reset-all', requireAdmin, async (req, res) => {
   try {
