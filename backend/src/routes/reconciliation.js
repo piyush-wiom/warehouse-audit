@@ -88,6 +88,15 @@ async function buildReconciliation(warehouseFilter, statusFilter, dateFrom, date
     orderBy: { correctedAt: 'desc' },
   });
 
+  const allAssignments = await prisma.assignment.findMany({
+    where: warehouseFilter ? { warehouse: warehouseFilter } : {},
+    select: { warehouse: true, binCode: true, createdAt: true },
+  });
+  const assignmentDateMap = {};
+  for (const a of allAssignments) {
+    assignmentDateMap[`${a.warehouse}::${a.binCode}`] = a.createdAt;
+  }
+
   // Group sessions by warehouse
   const sessionsByWH = {};
   for (const s of allSessions) {
@@ -187,6 +196,8 @@ async function buildReconciliation(warehouseFilter, statusFilter, dateFrom, date
       auditor: displaySession?.auditorEmail || null,
       correction,
       sessionDate: displaySession?.startTime || null,
+      assignedDate: assignmentDateMap[`${locationCode}::${binCode}`] || null,
+      auditDoneDate: displaySession?.endTime || null,
       isHistorical: isHistorical || false,
       hasActivityInRange,
     };
@@ -252,7 +263,7 @@ router.get('/export', requireAdmin, async (req, res) => {
     const filename = `reconciliation_${today}.csv`;
 
     const headers = [
-      'Warehouse', 'Bin', 'LPN/Box ID', 'Audit Date', 'Expected', 'Matched', 'Variance',
+      'Warehouse', 'Bin', 'LPN/Box ID', 'Assigned Date', 'Audit Done Date', 'Expected', 'Matched', 'Variance',
       'Remaining', 'Total Scanned', 'Original Status', 'Final Status',
       'Re-audit Variance', 'Re-audit By', 'Auditor', 'Correction Remark',
     ];
@@ -262,7 +273,8 @@ router.get('/export', requireAdmin, async (req, res) => {
       ...data.map(r =>
         [
           r.warehouse, r.bin, r.lpnBoxId ?? '',
-          r.sessionDate ? fmtDate(r.sessionDate) : '',
+          r.assignedDate ? fmtDate(r.assignedDate) : '',
+          r.auditDoneDate ? fmtDate(r.auditDoneDate) : '',
           r.expected, r.matched, r.variance, r.remaining, r.totalScanned,
           r.originalStatus, r.finalStatus,
           r.reauditVariance ?? '', r.reauditBy ?? '', r.auditor ?? '',

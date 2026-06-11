@@ -285,14 +285,14 @@ export default function Reconciliation() {
         <table className="w-full text-sm">
           <thead className="bg-gray-50 border-b border-gray-200">
             <tr>
-              {['Warehouse', 'Bin', 'LPN/Box ID', 'Audit Date', 'Expected', 'Matched', 'Variance', 'Remaining', 'Scanned', 'Status', 'Auditor', 'Correction'].map(h => (
+              {['Warehouse', 'Bin', 'LPN/Box ID', 'Assigned Date', 'Audit Done Date', 'Expected', 'Matched', 'Variance', 'Remaining', 'Scanned', 'Status', 'Auditor', 'Correction'].map(h => (
                 <th key={h} className="px-3 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">{h}</th>
               ))}
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100">
             {loading ? (
-              <tr><td colSpan={12} className="px-4 py-8 text-center text-gray-400">Loading…</td></tr>
+              <tr><td colSpan={13} className="px-4 py-8 text-center text-gray-400">Loading…</td></tr>
             ) : rows.map((r, i) => (
               <tr
                 key={i}
@@ -313,7 +313,12 @@ export default function Reconciliation() {
                     : <span className="text-xs text-gray-300">—</span>}
                 </td>
                 <td className="px-3 py-2.5 text-xs text-gray-500 whitespace-nowrap">
-                  {r.sessionDate ? new Date(r.sessionDate).toLocaleDateString('en-IN') : '—'}
+                  {r.assignedDate ? new Date(r.assignedDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—'}
+                </td>
+                <td className="px-3 py-2.5 text-xs text-gray-500 whitespace-nowrap">
+                  {r.auditDoneDate
+                    ? new Date(r.auditDoneDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
+                    : <span className="text-orange-400">Pending</span>}
                 </td>
                 <td className="px-3 py-2.5 text-center">{r.expected ?? '—'}</td>
                 <td className="px-3 py-2.5 text-center text-green-700 font-medium">{r.matched}</td>
@@ -330,7 +335,7 @@ export default function Reconciliation() {
               </tr>
             ))}
             {!loading && rows.length === 0 && (
-              <tr><td colSpan={12} className="px-4 py-8 text-center text-gray-400">No data for selected filters.</td></tr>
+              <tr><td colSpan={13} className="px-4 py-8 text-center text-gray-400">No data for selected filters.</td></tr>
             )}
           </tbody>
         </table>
