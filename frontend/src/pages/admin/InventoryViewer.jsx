@@ -105,9 +105,13 @@ export default function InventoryViewer() {
             <p className="text-sm text-gray-500 mt-0.5">
               {filters.upload_id ? (() => {
                 const u = uploads.find(u => u.id === filters.upload_id);
-                return u ? <>Viewing: <strong>{u.filename}</strong> uploaded on {new Date(u.createdAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })} · {u.totalDevices} devices</> : null;
+                const fmt = d => `${new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })} ${new Date(d).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true })}`;
+                return u ? <>Viewing: <strong>{u.filename}</strong> uploaded on {fmt(u.createdAt)} · {u.totalDevices} devices</> : null;
               })() : (
-                <>Latest upload: <strong>{uploads[0].filename}</strong> on {new Date(uploads[0].createdAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })} · {uploads[0].totalDevices} devices</>
+                (() => {
+                  const fmt = d => `${new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })} ${new Date(d).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true })}`;
+                  return <>Latest upload: <strong>{uploads[0].filename}</strong> on {fmt(uploads[0].createdAt)} · {uploads[0].totalDevices} devices</>;
+                })()
               )}
             </p>
           )}
@@ -137,7 +141,7 @@ export default function InventoryViewer() {
                 <option value="">All uploads</option>
                 {uploads.map((u, i) => (
                   <option key={u.id} value={u.id}>
-                    {new Date(u.createdAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })} — {u.filename} ({u.totalDevices} devices){i === 0 ? ' ✓ Active' : ''}
+                    {new Date(u.createdAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })} {new Date(u.createdAt).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true })} — {u.filename} ({u.totalDevices} devices){i === 0 ? ' ✓ Active' : ''}
                   </option>
                 ))}
               </select>

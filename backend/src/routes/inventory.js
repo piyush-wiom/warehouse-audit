@@ -64,23 +64,8 @@ router.post('/upload', requireAdmin, upload.single('file'), async (req, res) => 
       return res.status(400).json({ error: `Missing required columns: ${missing.join(', ')}` });
     }
 
-    // One upload per calendar day. If today already has an upload, replace it.
-    // Previous days' uploads are kept for historical visibility.
-    const todayStart = new Date();
-    todayStart.setUTCHours(0, 0, 0, 0);
-    const tomorrowStart = new Date(todayStart);
-    tomorrowStart.setUTCDate(tomorrowStart.getUTCDate() + 1);
-
-    const todaysUpload = await prisma.inventoryUpload.findFirst({
-      where: { createdAt: { gte: todayStart, lt: tomorrowStart } },
-    });
-    let replacedFilename = null;
-    if (todaysUpload) {
-      replacedFilename = todaysUpload.filename;
-      await prisma.inventory.deleteMany({ where: { uploadId: todaysUpload.id } });
-      await prisma.inventoryUpload.delete({ where: { id: todaysUpload.id } });
-    }
-
+    // Multiple uploads per day are allowed — each creates a new InventoryUpload record.
+    // The latest upload is always the active inventory for reconciliation/assignments.
     const uploadRecord = await prisma.inventoryUpload.create({
       data: { filename: req.file.originalname, uploadedBy: req.user.email },
     });
@@ -152,11 +137,8 @@ router.post('/upload', requireAdmin, upload.single('file'), async (req, res) => 
     if (orphanedAssignmentIds.length > 0) cleanupSummary.push(`${orphanedAssignmentIds.length} bin assignment(s)`);
 
     res.json({
-      message: replacedFilename
-        ? `Replaced today's inventory (${replacedFilename}) with ${toInsert.length} devices`
-        : `Uploaded ${toInsert.length} devices`,
+      message: `Uploaded ${toInsert.length} devices`,
       uploadId: uploadRecord.id,
-      replaced: replacedFilename || null,
       warnings: warnings.slice(0, 20),
       cleanup: cleanupSummary.length > 0
         ? `Removed orphaned records for bins no longer in inventory: ${cleanupSummary.join(', ')}`
