@@ -246,6 +246,26 @@ router.delete('/uploads/:id', requireAdmin, async (req, res) => {
       return res.status(400).json({ error: 'Cannot delete the active (latest) inventory upload. Upload a new inventory file first.' });
     }
 
+    // Block deletion if any audit sessions ran while this upload was the active inventory.
+    // "Active period" = from this upload's createdAt until the next upload's createdAt.
+    const nextUpload = await prisma.inventoryUpload.findFirst({
+      where: { createdAt: { gt: upload.createdAt } },
+      orderBy: { createdAt: 'asc' },
+    });
+    const sessionsDuringUpload = await prisma.auditSession.count({
+      where: {
+        startTime: {
+          gte: upload.createdAt,
+          ...(nextUpload ? { lt: nextUpload.createdAt } : {}),
+        },
+      },
+    });
+    if (sessionsDuringUpload > 0) {
+      return res.status(400).json({
+        error: `Cannot delete: ${sessionsDuringUpload} audit session(s) were conducted while this was the active inventory. Deleting it would break reconciliation for that period.`,
+      });
+    }
+
     const count = await prisma.inventory.count({ where: { uploadId: upload.id } });
     await prisma.inventory.deleteMany({ where: { uploadId: upload.id } });
     await prisma.inventoryUpload.delete({ where: { id: upload.id } });
