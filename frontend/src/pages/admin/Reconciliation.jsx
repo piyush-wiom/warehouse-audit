@@ -150,18 +150,6 @@ export default function Reconciliation() {
   const [loading, setLoading] = useState(true);
   const [selectedBin, setSelectedBin] = useState(null); // { warehouse, binCode }
 
-  // Default: last 3 months
-  useEffect(() => {
-    const today = new Date();
-    const threeMonthsAgo = new Date();
-    threeMonthsAgo.setMonth(today.getMonth() - 3);
-    setFilters(f => ({
-      ...f,
-      date_from: threeMonthsAgo.toISOString().slice(0, 10),
-      date_to: today.toISOString().slice(0, 10),
-    }));
-  }, []);
-
   async function load() {
     setLoading(true);
     try {
@@ -279,15 +267,17 @@ export default function Reconciliation() {
             <DateInput label="To" value={filters.date_to} onChange={v => setFilters(f => ({ ...f, date_to: v }))} />
           </div>
           {(filters.warehouse || filters.status || filters.date_from || filters.date_to) && (
-            <button onClick={() => {
-              const today = new Date().toISOString().slice(0, 10);
-              const ago = new Date(); ago.setMonth(ago.getMonth() - 3);
-              setFilters({ warehouse: '', status: '', date_from: ago.toISOString().slice(0, 10), date_to: today });
-            }} className="text-sm text-blue-600 hover:underline">Reset filters</button>
+            <button
+              onClick={() => setFilters({ warehouse: '', status: '', date_from: '', date_to: '' })}
+              className="text-sm text-blue-600 hover:underline"
+            >Reset filters</button>
           )}
         </div>
         <p className="text-xs text-gray-400 mt-2 flex items-center gap-1">
-          <Calendar size={11} /> Showing audit data for selected date range · Click any row to see device-level detail
+          <Calendar size={11} />
+          {(filters.date_from || filters.date_to)
+            ? 'Showing only bins with audit activity in the selected date range · Clear dates to see all bins'
+            : 'Showing all bins · Set a date range to filter by audit activity · Click any row for device detail'}
         </p>
       </div>
 

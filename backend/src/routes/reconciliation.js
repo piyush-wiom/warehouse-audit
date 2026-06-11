@@ -150,6 +150,9 @@ async function buildReconciliation(warehouseFilter, statusFilter, dateFrom, date
 
     const displaySession = latestSessionForBin || latestSessionForBinAny;
 
+    // When a date filter is active, mark bins with no activity in that range so they can be excluded
+    const hasActivityInRange = !hasDateFilter || latestSessionForBin !== null;
+
     // Variance = only from the LATEST session for this bin (not accumulated across sessions)
     const latestSessionScans = displaySession
       ? (scansBySessionBin[`${displaySession.id}::${binCode}`] || [])
@@ -185,6 +188,7 @@ async function buildReconciliation(warehouseFilter, statusFilter, dateFrom, date
       correction,
       sessionDate: displaySession?.startTime || null,
       isHistorical: isHistorical || false,
+      hasActivityInRange,
     };
   }
 
@@ -216,13 +220,13 @@ async function buildReconciliation(warehouseFilter, statusFilter, dateFrom, date
     )
     .filter(r => r.totalScanned > 0); // only show historical bins that actually have scans
 
-  const allRows = [...inventoryRows, ...historicalRows];
+  const allRows = [...inventoryRows, ...historicalRows]
+    .filter(r => r.hasActivityInRange); // hide bins with no activity when date filter is active
 
   const filtered = statusFilter
     ? allRows.filter(r => r.finalStatus === statusFilter || r.originalStatus === statusFilter)
     : allRows;
 
-  // Always return all bins — current inventory + historical audit bins
   return filtered;
 }
 
