@@ -159,17 +159,17 @@ async function buildReconciliation(warehouseFilter, statusFilter, dateFrom, date
 
     const displaySession = latestSessionForBin || latestSessionForBinAny;
 
-    // When a date filter is active, exclude bins with no activity in range —
-    // EXCEPT assigned bins that are still Pending (never audited, work still due).
-    const isAssigned = !!assignmentDateMap[`${locationCode}::${binCode}`];
-    const isPending = matched === 0 && variance === 0;
-    const hasActivityInRange = !hasDateFilter || latestSessionForBin !== null || (isAssigned && isPending);
-
     // Variance = only from the LATEST session for this bin (not accumulated across sessions)
     const latestSessionScans = displaySession
       ? (scansBySessionBin[`${displaySession.id}::${binCode}`] || [])
       : [];
     const variance = latestSessionScans.filter(s => !s.matched).length;
+
+    // When a date filter is active, exclude bins with no activity in range —
+    // EXCEPT assigned bins that are still Pending (never audited, work still due).
+    const isAssigned = !!assignmentDateMap[`${locationCode}::${binCode}`];
+    const isPending = matched === 0 && variance === 0;
+    const hasActivityInRange = !hasDateFilter || latestSessionForBin !== null || (isAssigned && isPending);
     const totalScanned = matched + variance;
 
     // For historical bins (no longer in current inventory), expected = matched (best we can do)
