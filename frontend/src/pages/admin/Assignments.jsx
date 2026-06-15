@@ -49,7 +49,7 @@ export default function Assignments() {
     setSelectedWarehouse(warehouse);
     setGroups([newGroup()]);
     if (warehouse) {
-      const { data } = await api.get(`/inventory/bins/${warehouse}`);
+      const { data } = await api.get(`/inventory/bins/${warehouse}?all=true`);
       setBins(data);
     } else {
       setBins([]);

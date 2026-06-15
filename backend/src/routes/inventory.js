@@ -127,10 +127,16 @@ router.get('/warehouses', requireAuth, async (req, res) => {
   res.json(rows.map(r => r.locationCode));
 });
 
-// GET /api/inventory/bins/:warehouse — always from latest upload
+// GET /api/inventory/bins/:warehouse
+// ?all=true → bins from ALL uploads (used by assignment form)
+// default  → latest upload only (used by auditor scan flow)
 router.get('/bins/:warehouse', requireAuth, async (req, res) => {
-  const latest = await prisma.inventoryUpload.findFirst({ orderBy: { createdAt: 'desc' } });
-  const where = { locationCode: req.params.warehouse, ...(latest ? { uploadId: latest.id } : {}) };
+  const showAll = req.query.all === 'true';
+  let where = { locationCode: req.params.warehouse };
+  if (!showAll) {
+    const latest = await prisma.inventoryUpload.findFirst({ orderBy: { createdAt: 'desc' } });
+    if (latest) where.uploadId = latest.id;
+  }
   const rows = await prisma.inventory.findMany({
     where,
     select: { binCode: true, zoneCode: true, inventory: true, lpnBoxId: true },
