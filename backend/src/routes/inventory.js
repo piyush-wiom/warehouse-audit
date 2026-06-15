@@ -128,12 +128,16 @@ router.get('/warehouses', requireAuth, async (req, res) => {
 });
 
 // GET /api/inventory/bins/:warehouse
-// ?all=true → bins from ALL uploads (used by assignment form)
-// default  → latest upload only (used by auditor scan flow)
+// ?all=true     → bins from ALL uploads (assignment form)
+// ?upload_id=x  → bins from a specific upload (inventory viewer bin dropdown)
+// default       → latest upload only (auditor scan flow)
 router.get('/bins/:warehouse', requireAuth, async (req, res) => {
   const showAll = req.query.all === 'true';
+  const uploadId = req.query.upload_id;
   let where = { locationCode: req.params.warehouse };
-  if (!showAll) {
+  if (uploadId) {
+    where.uploadId = uploadId;
+  } else if (!showAll) {
     const latest = await prisma.inventoryUpload.findFirst({ orderBy: { createdAt: 'desc' } });
     if (latest) where.uploadId = latest.id;
   }

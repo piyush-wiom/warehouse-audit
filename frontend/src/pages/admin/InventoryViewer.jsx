@@ -17,15 +17,17 @@ export default function InventoryViewer() {
     api.get('/inventory/uploads').then(r => setUploads(r.data)).catch(() => {});
   }, []);
 
+  async function fetchBins(warehouse, uploadId) {
+    if (!warehouse) { setBins([]); return; }
+    const params = uploadId ? `?upload_id=${uploadId}` : '';
+    const { data } = await api.get(`/inventory/bins/${warehouse}${params}`);
+    setBins(data);
+  }
+
   async function handleWarehouseChange(warehouse) {
     setFilters(f => ({ ...f, warehouse, bin: '' }));
     setDevices([]);
-    if (warehouse) {
-      const { data } = await api.get(`/inventory/bins/${warehouse}`);
-      setBins(data);
-    } else {
-      setBins([]);
-    }
+    fetchBins(warehouse, filters.upload_id);
   }
 
   async function handleSearch() {
@@ -44,6 +46,11 @@ export default function InventoryViewer() {
     } finally {
       setLoading(false);
     }
+  }
+
+  async function handleUploadChange(uploadId) {
+    setFilters(f => ({ ...f, upload_id: uploadId, bin: '' }));
+    if (filters.warehouse) fetchBins(filters.warehouse, uploadId);
   }
 
   useEffect(() => {
@@ -137,7 +144,7 @@ export default function InventoryViewer() {
           <div>
             <label className="label">Upload Date</label>
             <div className="flex gap-2 items-center">
-              <select className="input flex-1" value={filters.upload_id} onChange={e => setFilters(f => ({ ...f, upload_id: e.target.value }))}>
+              <select className="input flex-1" value={filters.upload_id} onChange={e => handleUploadChange(e.target.value)}>
                 <option value="">All uploads</option>
                 {uploads.map((u, i) => (
                   <option key={u.id} value={u.id}>

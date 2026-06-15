@@ -234,6 +234,81 @@ async function buildReconciliation(warehouseFilter, statusFilter, dateFrom, date
     )
     .filter(r => r.totalScanned > 0); // only show historical bins that actually have scans
 
+  // Batch upload support: bins from older uploads that aren't in current inventory
+  // and haven't been scanned yet must still appear (they're pending audit).
+  if (latestUpload) {
+    const olderUploads = await prisma.inventoryUpload.findMany({
+      where: { id: { not: latestUpload.id } },
+      orderBy: { createdAt: 'desc' },
+      select: { id: true },
+    });
+
+    if (olderUploads.length > 0) {
+      const uploadRankMap = new Map(olderUploads.map((u, i) => [u.id, i])); // 0 = most recent
+
+      // All inventory rows from older uploads
+      const olderRows = await prisma.inventory.findMany({
+        where: {
+          uploadId: { in: olderUploads.map(u => u.id) },
+          ...(warehouseFilter ? { locationCode: warehouseFilter } : {}),
+        },
+        select: { locationCode: true, binCode: true, uploadId: true, lpnBoxId: true },
+      });
+
+      // For each locationCode::binCode, track the most recent older upload containing it
+      const mostRecentOlderUpload = {};
+      for (const row of olderRows) {
+        const key = `${row.locationCode}::${row.binCode}`;
+        if (currentBinKeys.has(key)) continue; // already in current inventory
+        const rank = uploadRankMap.get(row.uploadId) ?? 999;
+        if (!mostRecentOlderUpload[key] || rank < mostRecentOlderUpload[key].rank) {
+          mostRecentOlderUpload[key] = { locationCode: row.locationCode, binCode: row.binCode, uploadId: row.uploadId, rank, lpnBoxId: row.lpnBoxId || null };
+        }
+      }
+
+      // Bins already covered by historicalRows (have scans)
+      const coveredKeys = new Set(historicalRows.map(r => `${r.warehouse}::${r.bin}`));
+
+      // For each uncovered older bin, get its expected count from its most recent older upload
+      const uncoveredBins = Object.values(mostRecentOlderUpload).filter(
+        b => !coveredKeys.has(`${b.locationCode}::${b.binCode}`)
+      );
+
+      if (uncoveredBins.length > 0) {
+        // Group by uploadId for efficient counting
+        const binsByUpload = {};
+        for (const b of uncoveredBins) {
+          if (!binsByUpload[b.uploadId]) binsByUpload[b.uploadId] = [];
+          binsByUpload[b.uploadId].push(b);
+        }
+
+        for (const [uploadId, bins] of Object.entries(binsByUpload)) {
+          const counts = await prisma.inventory.groupBy({
+            by: ['locationCode', 'binCode'],
+            where: {
+              uploadId,
+              locationCode: { in: bins.map(b => b.locationCode) },
+              binCode: { in: bins.map(b => b.binCode) },
+            },
+            _count: { id: true },
+          });
+          const countMap = new Map(counts.map(c => [`${c.locationCode}::${c.binCode}`, c._count.id]));
+
+          for (const bin of bins) {
+            const expected = countMap.get(`${bin.locationCode}::${bin.binCode}`) || 0;
+            historicalRows.push(computeBinRow({
+              locationCode: bin.locationCode,
+              binCode: bin.binCode,
+              expected,
+              lpnBoxId: bin.lpnBoxId,
+              isHistorical: false, // show expected count properly
+            }));
+          }
+        }
+      }
+    }
+  }
+
   const allRows = [...inventoryRows, ...historicalRows]
     .filter(r => r.hasActivityInRange); // hide bins with no activity when date filter is active
 
