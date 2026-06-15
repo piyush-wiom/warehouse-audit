@@ -137,9 +137,24 @@ export default function Assignments() {
     }
   }
 
-  const filteredAssignments = assignments.filter(a =>
-    !userSearch || a.assignedTo.toLowerCase().includes(userSearch.toLowerCase())
-  );
+  const [tableWarehouse, setTableWarehouse] = useState('');
+  const [tableStatus, setTableStatus] = useState('');
+
+  const filteredAssignments = assignments.filter(a => {
+    if (userSearch && !a.assignedTo.toLowerCase().includes(userSearch.toLowerCase())) return false;
+    if (tableWarehouse && a.warehouse !== tableWarehouse) return false;
+    const status = (statusMap[`${a.warehouse}::${a.binCode}`]?.status) || 'Pending';
+    if (tableStatus && status !== tableStatus) return false;
+    return true;
+  });
+
+  const allWarehouses = [...new Set(assignments.map(a => a.warehouse))].sort();
+
+  const summary = assignments.reduce((acc, a) => {
+    const status = (statusMap[`${a.warehouse}::${a.binCode}`]?.status) || 'Pending';
+    acc[status] = (acc[status] || 0) + 1;
+    return acc;
+  }, {});
 
   const totalBinsInForm = groups.reduce((s, g) => s + g.bins.length, 0);
 
@@ -250,12 +265,43 @@ export default function Assignments() {
         </form>
       )}
 
-      {/* Filter */}
-      <div className="flex items-center gap-2 mb-3">
+      {/* Summary stats */}
+      {assignments.length > 0 && (
+        <div className="flex flex-wrap gap-2 mb-4">
+          <span className="text-xs text-gray-500 self-center mr-1">Progress:</span>
+          {Object.entries(summary).map(([status, count]) => (
+            <button
+              key={status}
+              onClick={() => setTableStatus(s => s === status ? '' : status)}
+              className={`${STATUS_BADGE[status] || 'badge-pending'} cursor-pointer ${tableStatus === status ? 'ring-2 ring-offset-1 ring-blue-400' : ''}`}
+            >
+              {status}: {count}
+            </button>
+          ))}
+          <span className="text-xs text-gray-400 self-center ml-1">Total: {assignments.length} assigned</span>
+        </div>
+      )}
+
+      {/* Filters */}
+      <div className="flex flex-wrap items-center gap-2 mb-3">
         <Search size={16} className="text-gray-400 shrink-0" />
-        <input className="input flex-1 max-w-xs" placeholder="Filter by username or email…"
+        <input className="input max-w-[200px]" placeholder="Filter by auditor…"
           value={userSearch} onChange={e => setUserSearch(e.target.value)} />
-        {userSearch && <span className="text-xs text-gray-400">{filteredAssignments.length} of {assignments.length}</span>}
+        <select className="input w-auto" value={tableWarehouse} onChange={e => setTableWarehouse(e.target.value)}>
+          <option value="">All Warehouses</option>
+          {allWarehouses.map(w => <option key={w} value={w}>{w}</option>)}
+        </select>
+        <select className="input w-auto" value={tableStatus} onChange={e => setTableStatus(e.target.value)}>
+          <option value="">All Statuses</option>
+          {['Pending', 'Scanning', 'Complete', 'Short', 'Excess', 'Variance', 'Corrected'].map(s => (
+            <option key={s} value={s}>{s}</option>
+          ))}
+        </select>
+        {(userSearch || tableWarehouse || tableStatus) && (
+          <button onClick={() => { setUserSearch(''); setTableWarehouse(''); setTableStatus(''); }}
+            className="text-sm text-blue-600 hover:underline">Clear filters</button>
+        )}
+        <span className="text-xs text-gray-400 ml-auto">{filteredAssignments.length} of {assignments.length} bins</span>
       </div>
 
       {/* Table */}
@@ -263,7 +309,7 @@ export default function Assignments() {
         <table className="w-full text-sm">
           <thead className="bg-gray-50 border-b border-gray-200">
             <tr>
-              {['Warehouse', 'Bin', 'LPN/Box ID', 'Status', 'Assigned To', 'Assigned By', 'Date', ''].map(h => (
+              {['Warehouse', 'Bin', 'LPN/Box ID', 'Status', 'Assigned To', 'Assigned By', 'Assigned Date', ''].map(h => (
                 <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">{h}</th>
               ))}
             </tr>
@@ -285,7 +331,7 @@ export default function Assignments() {
                   <td className="px-4 py-3"><span className={STATUS_BADGE[status] || 'badge-pending'}>{status}</span></td>
                   <td className="px-4 py-3 text-gray-600">{a.assignedTo}</td>
                   <td className="px-4 py-3 text-gray-500">{a.assignedBy}</td>
-                  <td className="px-4 py-3 text-gray-400 text-xs">{new Date(a.createdAt).toLocaleDateString('en-IN')}</td>
+                  <td className="px-4 py-3 text-gray-400 text-xs">{new Date(a.createdAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</td>
                   <td className="px-4 py-3">
                     {status === 'Pending' ? (
                       <button onClick={() => handleUnassign(a.id, a.binCode)}
@@ -301,7 +347,7 @@ export default function Assignments() {
             })}
             {filteredAssignments.length === 0 && (
               <tr><td colSpan={8} className="px-4 py-8 text-center text-gray-400">
-                {userSearch ? `No assignments matching "${userSearch}"` : 'No assignments yet'}
+                {(userSearch || tableWarehouse || tableStatus) ? 'No assignments match the selected filters' : 'No assignments yet'}
               </td></tr>
             )}
           </tbody>
