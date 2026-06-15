@@ -104,45 +104,14 @@ router.post('/upload', requireAdmin, upload.single('file'), async (req, res) => 
     // Build set of valid warehouse::binCode pairs from new upload
     const validBinKeys = new Set(toInsert.map(r => `${r.locationCode}::${r.binCode}`));
 
-    // Clean up orphaned Corrections for bins no longer in inventory
-    const allCorrections = await prisma.correction.findMany({ select: { id: true, warehouse: true, binCode: true } });
-    const orphanedCorrectionIds = allCorrections
-      .filter(c => !validBinKeys.has(`${c.warehouse}::${c.binCode}`))
-      .map(c => c.id);
-    if (orphanedCorrectionIds.length > 0) {
-      await prisma.correction.deleteMany({ where: { id: { in: orphanedCorrectionIds } } });
-    }
-
-    // Clean up orphaned ReauditAssignments for bins no longer in inventory
-    const allReaudits = await prisma.reauditAssignment.findMany({ select: { id: true, warehouse: true, binCode: true } });
-    const orphanedReauditIds = allReaudits
-      .filter(r => !validBinKeys.has(`${r.warehouse}::${r.binCode}`))
-      .map(r => r.id);
-    if (orphanedReauditIds.length > 0) {
-      await prisma.reauditAssignment.deleteMany({ where: { id: { in: orphanedReauditIds } } });
-    }
-
-    // Clean up orphaned Assignments for bins no longer in inventory
-    const allAssignments = await prisma.assignment.findMany({ select: { id: true, warehouse: true, binCode: true } });
-    const orphanedAssignmentIds = allAssignments
-      .filter(a => !validBinKeys.has(`${a.warehouse}::${a.binCode}`))
-      .map(a => a.id);
-    if (orphanedAssignmentIds.length > 0) {
-      await prisma.assignment.deleteMany({ where: { id: { in: orphanedAssignmentIds } } });
-    }
-
-    const cleanupSummary = [];
-    if (orphanedCorrectionIds.length > 0) cleanupSummary.push(`${orphanedCorrectionIds.length} correction(s)`);
-    if (orphanedReauditIds.length > 0) cleanupSummary.push(`${orphanedReauditIds.length} re-audit assignment(s)`);
-    if (orphanedAssignmentIds.length > 0) cleanupSummary.push(`${orphanedAssignmentIds.length} bin assignment(s)`);
+    // Assignments persist across uploads — batch workflow means bins assigned from
+    // previous uploads must remain visible until manually unassigned or audited.
+    // Do NOT delete assignments on new upload.
 
     res.json({
       message: `Uploaded ${toInsert.length} devices`,
       uploadId: uploadRecord.id,
       warnings: warnings.slice(0, 20),
-      cleanup: cleanupSummary.length > 0
-        ? `Removed orphaned records for bins no longer in inventory: ${cleanupSummary.join(', ')}`
-        : null,
     });
   } catch (err) {
     console.error(err);
